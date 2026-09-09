@@ -1,0 +1,20 @@
+[package]
+name = "zakofish4-tap"
+version = "0.1.0"
+edition = "2024"
+description = "SDK for building a Zako4 tap: gateway WebSocket plus protofish4 audio delivery."
+
+[dependencies]
+zakofish4-common = { path = "../zakofish4-common", version = "0.1.0" }
+protofish4 = { path = "../../protofish4/protofish4", version = "0.1.0" }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures = "0.3"
+async-trait = "0.1"
+thiserror = "2"
+tracing = "0.1"
+bytes = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+zakofish4-hub = { path = "../zakofish4-hub", version = "0.1.0" }

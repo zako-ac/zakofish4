@@ -1,0 +1,12 @@
+[package]
+name = "zakofish4-common"
+version = "0.1.0"
+edition = "2024"
+description = "Wire messages and the sans-IO hub state machine for the Zako4 tap gateway."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tracing = "0.1"
+uuid = { version = "1.26", features = ["v4", "serde"] }
+rmp-serde = "1.3"

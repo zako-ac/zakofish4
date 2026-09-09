@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["zakofish4-common", "zakofish4-hub", "zakofish4-tap"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+zakofish4-common = { path = "zakofish4-common", version = "0.1.0" }
+zakofish4-hub = { path = "zakofish4-hub", version = "0.1.0" }
+zakofish4-tap = { path = "zakofish4-tap", version = "0.1.0" }
+protofish4 = { path = "../protofish4/protofish4", version = "0.1.0" }
+
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.20"
+tracing = "0.1.44"
+uuid = { version = "1.26", features = ["v4", "serde"] }
+rmp-serde = "1.3"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+futures = "0.3"
+async-trait = "0.1"
