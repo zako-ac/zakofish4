@@ -493,6 +493,7 @@ dependencies = [
 [[package]]
 name = "protofish4"
 version = "0.1.0"
+source = "git+https://github.com/zako-ac/protofish4-rs#d925f73b61d15968b39fd3f3de881035a99dc070"
 dependencies = [
  "bytes",
  "protofish4-proto",
@@ -505,6 +506,7 @@ dependencies = [
 [[package]]
 name = "protofish4-proto"
 version = "0.1.0"
+source = "git+https://github.com/zako-ac/protofish4-rs#d925f73b61d15968b39fd3f3de881035a99dc070"
 dependencies = [
  "chacha20poly1305",
  "thiserror 2.0.20",

@@ -6,7 +6,7 @@ description = "SDK for building a Zako4 tap: gateway WebSocket plus protofish4 a
 
 [dependencies]
 zakofish4-common = { path = "../zakofish4-common", version = "0.1.0" }
-protofish4 = { path = "../../protofish4/protofish4", version = "0.1.0" }
+protofish4 = { git = "https://github.com/zako-ac/protofish4-rs" }
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures = "0.3"
