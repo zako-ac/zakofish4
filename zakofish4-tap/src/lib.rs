@@ -30,15 +30,29 @@
 //!   rather than treating the audio as lost.
 //! - **Delivery.** `deliver_to` is a preference list, so a tap follows the
 //!   move from a shared proxy to per-sink addresses with no code change.
+//!
+//! Two optional features carry over from the protofish3-era SDK unchanged, so
+//! that migrating an existing tap really is a dependency swap and a new hub
+//! URL:
+//!
+//! - `auto-encode` — [`decode_and_stream`], which pipes an encoded file through
+//!   ffmpeg and sends the Opus frames out.
+//! - `healthcheck` — [`TapBuilder::healthcheck_port`], serving `GET /health`.
 
 pub mod builder;
+#[cfg(feature = "auto-encode")]
+pub mod encode;
 pub mod error;
+#[cfg(feature = "healthcheck")]
+mod healthcheck;
 pub mod handler;
 mod runtime;
 pub mod source;
 pub mod stream;
 
 pub use builder::{TapBuilder, tap};
+#[cfg(feature = "auto-encode")]
+pub use encode::{EncodeError, decode_and_stream};
 pub use error::{SdkError, TapError};
 pub use handler::TapHandler;
 pub use source::AudioSource;

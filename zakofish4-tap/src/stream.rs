@@ -18,7 +18,7 @@ pub const FRAME_MS: u64 = 20;
 /// the transfer cleanly; the runtime then reports the outcome to the hub.
 ///
 /// `send_frame` applies backpressure and will wait. That is deliberate — see
-/// [`Pacer`] — so a tap should push frames as it produces them rather than
+/// the pacing note below — so a tap should push frames as it produces them rather than
 /// buffering a whole track first.
 pub struct AudioStreamSender {
     tx: mpsc::Sender<OutFrame>,

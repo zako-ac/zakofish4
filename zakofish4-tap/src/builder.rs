@@ -21,6 +21,8 @@ pub struct TapBuilder {
     pacing_lead: Duration,
     reconnect_min: Duration,
     reconnect_max: Duration,
+    #[cfg(feature = "healthcheck")]
+    healthcheck_port: Option<u16>,
 }
 
 impl Default for TapBuilder {
@@ -36,6 +38,8 @@ impl Default for TapBuilder {
             pacing_lead: Duration::from_secs(4),
             reconnect_min: Duration::from_millis(500),
             reconnect_max: Duration::from_secs(30),
+            #[cfg(feature = "healthcheck")]
+            healthcheck_port: None,
         }
     }
 }
@@ -80,6 +84,17 @@ impl TapBuilder {
         self
     }
 
+    /// Serve `GET /health` on this port, for an orchestrator's probes.
+    ///
+    /// It reports the process, not the hub connection: the SDK reconnects with
+    /// backoff, and restarting a tap that is briefly disconnected would only
+    /// make the outage longer.
+    #[cfg(feature = "healthcheck")]
+    pub fn healthcheck_port(mut self, port: u16) -> Self {
+        self.healthcheck_port = Some(port);
+        self
+    }
+
     /// Connect and serve until the hub rejects this tap or the process ends.
     /// Reconnection with backoff is handled internally.
     pub async fn run(self, handler: Arc<dyn TapHandler>) -> Result<(), SdkError> {
@@ -95,6 +110,11 @@ impl TapBuilder {
             reconnect_min: self.reconnect_min,
             reconnect_max: self.reconnect_max,
         };
+        #[cfg(feature = "healthcheck")]
+        if let Some(port) = self.healthcheck_port {
+            tokio::spawn(crate::healthcheck::serve(port));
+        }
+
         runtime::run(cfg, handler).await
     }
 }
