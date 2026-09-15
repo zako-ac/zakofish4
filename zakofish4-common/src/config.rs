@@ -20,6 +20,14 @@ pub struct HubConfig {
 
     /// Highest protocol version this hub serves.
     pub protocol_version: u32,
+
+    /// How long a tap has to answer a probe before it counts as unanswerable.
+    ///
+    /// Generous compared to the heartbeat: the tap is synthesizing a phrase,
+    /// which on a cold cache is real work, and the check is periodic rather
+    /// than on the request path. Marking a healthy tap unhealthy for being
+    /// briefly busy costs every subsequent request.
+    pub probe_timeout: Duration,
 }
 
 impl Default for HubConfig {
@@ -29,6 +37,7 @@ impl Default for HubConfig {
             heartbeat_interval: Duration::from_secs(15),
             heartbeat_deadline: Duration::from_secs(10),
             protocol_version: crate::messages::PROTOCOL_VERSION,
+            probe_timeout: Duration::from_secs(20),
         }
     }
 }

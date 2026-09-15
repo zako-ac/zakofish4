@@ -582,3 +582,126 @@ fn a_missing_pong_disconnects() {
         HubAction::Disconnect(DisconnectReason::HeartbeatTimeout)
     )));
 }
+
+// --- probes ----------------------------------------------------------------
+
+fn probes(actions: &[HubAction]) -> Vec<(u64, String)> {
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            HubAction::ProbeCompleted { probe_id, result } => {
+                let tag = match result {
+                    Some(ProbeResult::Ready {
+                        time_to_first_sample_ms,
+                    }) => format!("ready:{time_to_first_sample_ms}"),
+                    Some(ProbeResult::Failed { reason }) => format!("failed:{reason}"),
+                    Some(ProbeResult::Unsupported) => "unsupported".to_string(),
+                    None => "unanswered".to_string(),
+                };
+                Some((*probe_id, tag))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_probe_is_sent_and_its_deadline_armed() {
+    let cfg = HubConfig::default();
+    let state = authenticated(&cfg);
+
+    let (_, actions) = handle_event(state, HubEvent::DispatchProbe(7), &cfg).unwrap();
+
+    assert!(matches!(
+        sent(&actions).as_slice(),
+        [HubToTapMessage::Probe { probe_id: 7 }]
+    ));
+    assert!(actions.iter().any(|a| matches!(
+        a,
+        HubAction::StartTimer(TimerId::Probe(7), _)
+    )));
+}
+
+#[test]
+fn a_probe_answer_completes_the_probe_and_releases_its_timer() {
+    let cfg = HubConfig::default();
+    let (state, _) = handle_event(authenticated(&cfg), HubEvent::DispatchProbe(7), &cfg).unwrap();
+
+    let (_, actions) = handle_event(
+        state,
+        HubEvent::MessageFromTap(TapToHubMessage::ProbeResult {
+            probe_id: 7,
+            result: ProbeResult::Ready {
+                time_to_first_sample_ms: 412,
+            },
+        }),
+        &cfg,
+    )
+    .unwrap();
+
+    assert_eq!(probes(&actions), vec![(7, "ready:412".to_string())]);
+    assert!(actions.iter().any(|a| matches!(
+        a,
+        HubAction::CancelTimer(TimerId::Probe(7))
+    )));
+}
+
+/// The whole reason the probe exists: an unanswered one has to be a verdict,
+/// not silence that the caller reads as a healthy tap.
+#[test]
+fn an_unanswered_probe_is_reported_rather_than_left_pending() {
+    let cfg = HubConfig::default();
+    let (state, _) = handle_event(authenticated(&cfg), HubEvent::DispatchProbe(1), &cfg).unwrap();
+
+    let (state, actions) =
+        handle_event(state, HubEvent::TimerFired(TimerId::Probe(1)), &cfg).unwrap();
+
+    assert_eq!(probes(&actions), vec![(1, "unanswered".to_string())]);
+
+    // And it is not reported twice: a second firing finds nothing outstanding.
+    let (_, actions) = handle_event(state, HubEvent::TimerFired(TimerId::Probe(1)), &cfg).unwrap();
+    assert!(probes(&actions).is_empty());
+}
+
+#[test]
+fn a_probe_answer_nobody_is_waiting_for_is_ignored() {
+    let cfg = HubConfig::default();
+    let state = authenticated(&cfg);
+
+    let (state, actions) = handle_event(
+        state,
+        HubEvent::MessageFromTap(TapToHubMessage::ProbeResult {
+            probe_id: 99,
+            result: ProbeResult::Failed {
+                reason: "invented".into(),
+            },
+        }),
+        &cfg,
+    )
+    .unwrap();
+
+    assert!(probes(&actions).is_empty());
+    // Not a protocol error either: repeating yourself is not worth losing a
+    // working connection over.
+    assert!(matches!(state, TapState::Authenticated { .. }));
+}
+
+/// The connection dying while a probe is outstanding must resolve it, or the
+/// caller waits out a deadline for an answer that can no longer arrive.
+#[test]
+fn dropping_the_connection_fails_an_outstanding_probe() {
+    let cfg = HubConfig::default();
+    let (state, _) = handle_event(authenticated(&cfg), HubEvent::DispatchProbe(3), &cfg).unwrap();
+
+    assert_eq!(
+        probes(&on_disconnect(&state)),
+        vec![(3, "unanswered".to_string())]
+    );
+}
+
+#[test]
+fn a_probe_before_hello_is_refused() {
+    let cfg = HubConfig::default();
+    let err = handle_event(TapState::new(), HubEvent::DispatchProbe(1), &cfg).unwrap_err();
+    assert!(matches!(err, HubError::InternalError(_)));
+}

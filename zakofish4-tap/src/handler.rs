@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use zakofish4_common::messages::{AudioMetadataSuccessMessage, AudioRequestSuccessMessage};
+use zakofish4_common::messages::{
+    AudioMetadataSuccessMessage, AudioRequestSuccessMessage, ProbeResult,
+};
 
 use crate::error::TapError;
 use crate::source::AudioSource;
@@ -31,4 +33,22 @@ pub trait TapHandler: Send + Sync + 'static {
         source: AudioSource,
         stream: AudioStreamSender,
     ) -> Result<AudioRequestSuccessMessage, TapError>;
+
+    /// Prove this tap can still synthesize, without a sink and without the
+    /// network.
+    ///
+    /// The hub asks because a tap that keeps its control connection alive while
+    /// its synthesis pipeline has wedged is invisible: it answers heartbeats,
+    /// it answers `AudioRequestSuccess`, and the listener hears nothing. The
+    /// same pipeline the real requests take should be exercised — script,
+    /// cache, encoder — on a short fixed phrase, and the result thrown away.
+    /// Nothing must be sent anywhere: there is no `deliver_to` and no sink.
+    ///
+    /// The default reports [`ProbeResult::Unsupported`], which the hub records
+    /// as "no opinion" and routes exactly as before. That is deliberately the
+    /// safe answer for a tap that has not implemented this yet — inheriting it
+    /// must not cost the tap its traffic.
+    async fn probe(&self) -> ProbeResult {
+        ProbeResult::Unsupported
+    }
 }

@@ -29,7 +29,18 @@ impl TapHandle {
     /// it, and the sink's silence plus the tap's own acknowledgement watchdog
     /// tear the transfer down instead.
     pub fn cancel(&self, request_id: RequestId) -> bool {
-        self.tx.try_send(HubEvent::CancelRequest(request_id)).is_ok()
+        self.tx
+            .try_send(HubEvent::CancelRequest(request_id))
+            .is_ok()
+    }
+
+    /// Ask this tap to prove it can still synthesize.
+    ///
+    /// Returns `false` once the connection is gone, like every other method
+    /// here, so a caller holding a stale handle reads it as "no answer" rather
+    /// than hanging on one.
+    pub fn probe(&self, probe_id: u64) -> bool {
+        self.tx.try_send(HubEvent::DispatchProbe(probe_id)).is_ok()
     }
 
     pub fn is_connected(&self) -> bool {
