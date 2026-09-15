@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use crate::action::{DisconnectReason, HubAction};
@@ -55,6 +55,12 @@ pub enum TapState {
     Authenticated {
         hello: TapClientHello,
         outstanding: HashMap<RequestId, Tracked>,
+        /// Probes sent and not yet answered.
+        ///
+        /// A set rather than a single slot because the hub side timers are
+        /// keyed by probe, and serialising probes on the hub would make one
+        /// slow answer hide every other connection's.
+        probes: HashSet<u64>,
     },
 }
 
@@ -100,9 +106,11 @@ pub fn handle_event(
     match state {
         TapState::Anonymous => handle_anonymous(event, cfg),
         TapState::Validating { hello } => handle_validating(hello, event),
-        TapState::Authenticated { hello, outstanding } => {
-            handle_authenticated(hello, outstanding, event, cfg)
-        }
+        TapState::Authenticated {
+            hello,
+            outstanding,
+            probes,
+        } => handle_authenticated(hello, outstanding, probes, event, cfg),
     }
 }
 
@@ -122,18 +130,35 @@ pub fn on_connect(cfg: &HubConfig) -> Vec<HubAction> {
 /// the WebSocket went away, so failing it here would truncate a track that is
 /// in fact playing fine. The tap re-announces such requests in `resuming` when
 /// it reconnects.
+///
+/// Probes in flight are failed too. They are about to become unanswerable, and
+/// leaving the caller to hit its own deadline would spend that deadline for
+/// nothing — the connection it was asking about is already gone.
 pub fn on_disconnect(state: &TapState) -> Vec<HubAction> {
-    let TapState::Authenticated { outstanding, .. } = state else {
+    let TapState::Authenticated {
+        outstanding,
+        probes,
+        ..
+    } = state
+    else {
         return Vec::new();
     };
-    outstanding
+
+    let mut actions: Vec<HubAction> = outstanding
         .iter()
         .filter(|(_, t)| t.phase == Phase::AwaitingResponse)
         .map(|(id, _)| HubAction::CompleteRequest {
             request_id: *id,
             outcome: RequestOutcome::Disconnected,
         })
-        .collect()
+        .collect();
+
+    actions.extend(probes.iter().map(|probe_id| HubAction::ProbeCompleted {
+        probe_id: *probe_id,
+        result: None,
+    }));
+
+    actions
 }
 
 fn handle_anonymous(
@@ -179,9 +204,14 @@ fn handle_anonymous(
         HubEvent::TapAccepted | HubEvent::TapRejected(_) => Err(HubError::InternalError(
             "credential result arrived for a connection that never sent ClientHello".to_string(),
         )),
-        HubEvent::DispatchRequest(_) | HubEvent::CancelRequest(_) => Err(
-            HubError::InternalError("cannot dispatch to an unauthenticated tap".to_string()),
-        ),
+        HubEvent::DispatchRequest(_) | HubEvent::CancelRequest(_) => Err(HubError::InternalError(
+            "cannot dispatch to an unauthenticated tap".to_string(),
+        )),
+        // A probe is a request for work, so it needs a credential like any
+        // other. Ping does not; this is not Ping.
+        HubEvent::DispatchProbe(_) => Err(HubError::InternalError(
+            "cannot probe an unauthenticated tap".to_string(),
+        )),
     }
 }
 
@@ -197,7 +227,10 @@ fn handle_validating(
             for id in &hello.resuming {
                 outstanding.insert(
                     *id,
-                    Tracked { kind: Kind::Audio, phase: Phase::Streaming },
+                    Tracked {
+                        kind: Kind::Audio,
+                        phase: Phase::Streaming,
+                    },
                 );
             }
 
@@ -205,7 +238,14 @@ fn handle_validating(
                 HubAction::SendMessageToTap(HubToTapMessage::Accept),
                 HubAction::StartTimer(TimerId::Heartbeat, Duration::ZERO),
             ];
-            Ok((TapState::Authenticated { hello, outstanding }, actions))
+            Ok((
+                TapState::Authenticated {
+                    hello,
+                    outstanding,
+                    probes: HashSet::new(),
+                },
+                actions,
+            ))
         }
         HubEvent::TapRejected(reject) => Ok((
             TapState::Anonymous,
@@ -218,15 +258,19 @@ fn handle_validating(
         // valid yet, but it is not worth a disconnect either.
         HubEvent::MessageFromTap(_) => Ok((TapState::Validating { hello }, Vec::new())),
         HubEvent::TimerFired(_) => Ok((TapState::Validating { hello }, Vec::new())),
-        HubEvent::DispatchRequest(_) | HubEvent::CancelRequest(_) => Err(
-            HubError::InternalError("cannot dispatch while validating".to_string()),
-        ),
+        HubEvent::DispatchRequest(_) | HubEvent::CancelRequest(_) => Err(HubError::InternalError(
+            "cannot dispatch while validating".to_string(),
+        )),
+        HubEvent::DispatchProbe(_) => Err(HubError::InternalError(
+            "cannot probe while validating".to_string(),
+        )),
     }
 }
 
 fn handle_authenticated(
     hello: TapClientHello,
     mut outstanding: HashMap<RequestId, Tracked>,
+    mut probes: HashSet<u64>,
     event: HubEvent,
     cfg: &HubConfig,
 ) -> Result<(TapState, Vec<HubAction>), HubError> {
@@ -239,7 +283,10 @@ fn handle_authenticated(
             on_response(&mut outstanding, response, &mut actions)?;
         }
 
-        HubEvent::MessageFromTap(Msg::StreamOutcome { request_id, outcome }) => {
+        HubEvent::MessageFromTap(Msg::StreamOutcome {
+            request_id,
+            outcome,
+        }) => {
             // Accepted even for a request this connection never dispatched: a
             // tap that reconnected mid-transfer reports on work begun in an
             // earlier session, and the hub resolves it out of shared state.
@@ -258,6 +305,40 @@ fn handle_authenticated(
             ));
         }
 
+        HubEvent::MessageFromTap(Msg::ProbeResult { probe_id, result }) => {
+            // An answer to a probe this connection is not waiting on is either
+            // late (already reported as unanswered) or invented. Neither is
+            // worth dropping a working connection over, and treating it as an
+            // answer would let a tap retract a verdict by repeating itself.
+            if probes.remove(&probe_id) {
+                actions.push(HubAction::CancelTimer(TimerId::Probe(probe_id)));
+                actions.push(HubAction::ProbeCompleted {
+                    probe_id,
+                    result: Some(result),
+                });
+            }
+        }
+
+        HubEvent::DispatchProbe(probe_id) => {
+            probes.insert(probe_id);
+            actions.push(HubAction::SendMessageToTap(HubToTapMessage::Probe {
+                probe_id,
+            }));
+            actions.push(HubAction::StartTimer(
+                TimerId::Probe(probe_id),
+                cfg.probe_timeout,
+            ));
+        }
+
+        HubEvent::TimerFired(TimerId::Probe(probe_id)) => {
+            if probes.remove(&probe_id) {
+                actions.push(HubAction::ProbeCompleted {
+                    probe_id,
+                    result: None,
+                });
+            }
+        }
+
         HubEvent::MessageFromTap(Msg::ClientHello(_)) => {
             return Err(HubError::InvalidMessage(
                 "ClientHello on an already-authenticated connection".to_string(),
@@ -271,7 +352,10 @@ fn handle_authenticated(
             };
             outstanding.insert(
                 pending.request_id,
-                Tracked { kind, phase: Phase::AwaitingResponse },
+                Tracked {
+                    kind,
+                    phase: Phase::AwaitingResponse,
+                },
             );
             actions.push(HubAction::SendMessageToTap(HubToTapMessage::Request(
                 Request {
@@ -330,7 +414,14 @@ fn handle_authenticated(
         }
     }
 
-    Ok((TapState::Authenticated { hello, outstanding }, actions))
+    Ok((
+        TapState::Authenticated {
+            hello,
+            outstanding,
+            probes,
+        },
+        actions,
+    ))
 }
 
 fn on_response(
@@ -363,14 +454,13 @@ fn on_response(
         )));
     }
 
-    actions.push(HubAction::CancelTimer(TimerId::Request(response.request_id)));
+    actions.push(HubAction::CancelTimer(TimerId::Request(
+        response.request_id,
+    )));
 
     // An accepted audio request is not finished: the tap now streams over UDP,
     // and the hub stays interested until it hears how that went.
-    let keeps_streaming = matches!(
-        response.variant,
-        ResponseVariant::AudioRequestSuccess(_)
-    );
+    let keeps_streaming = matches!(response.variant, ResponseVariant::AudioRequestSuccess(_));
 
     actions.push(HubAction::CompleteRequest {
         request_id: response.request_id,
@@ -380,7 +470,10 @@ fn on_response(
     if keeps_streaming {
         outstanding.insert(
             response.request_id,
-            Tracked { kind: Kind::Audio, phase: Phase::Streaming },
+            Tracked {
+                kind: Kind::Audio,
+                phase: Phase::Streaming,
+            },
         );
     } else {
         outstanding.remove(&response.request_id);

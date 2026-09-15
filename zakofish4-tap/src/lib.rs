@@ -43,9 +43,9 @@ pub mod builder;
 #[cfg(feature = "auto-encode")]
 pub mod encode;
 pub mod error;
+pub mod handler;
 #[cfg(feature = "healthcheck")]
 mod healthcheck;
-pub mod handler;
 mod runtime;
 pub mod source;
 pub mod stream;
@@ -59,8 +59,9 @@ pub use source::AudioSource;
 pub use stream::{AudioStreamSender, FRAME_MS};
 
 pub use zakofish4_common as common;
+pub use zakofish4_common::messages::AttachedMetadata;
+pub use zakofish4_common::messages::ProbeResult;
 pub use zakofish4_common::messages::{AudioMetadataSuccessMessage, AudioRequestSuccessMessage};
 pub use zakofish4_common::model::{
     AudioCachePolicy, AudioCacheType, AudioMetadata, DiscordUserId, TapId,
 };
-pub use zakofish4_common::messages::AttachedMetadata;

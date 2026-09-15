@@ -20,6 +20,12 @@ pub enum HubEvent {
     /// The listener went away; tell the tap to stop.
     CancelRequest(RequestId),
 
+    /// The hub wants this tap to prove it can synthesize.
+    ///
+    /// Separate from [`Self::DispatchRequest`] because a probe is not a request:
+    /// nothing is streamed, nothing is cached, and no sink is waiting on it.
+    DispatchProbe(u64),
+
     /// A timer started by [`crate::action::HubAction::StartTimer`] fired.
     TimerFired(TimerId),
 }
@@ -35,6 +41,8 @@ pub enum TimerId {
     HeartbeatDeadline,
     /// A tap connected but never sent `ClientHello`.
     Handshake,
+    /// A probe went out and has not been answered.
+    Probe(u64),
 }
 
 /// What the hub learned from a completed request, handed to the caller so it

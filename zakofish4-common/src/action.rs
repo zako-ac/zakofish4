@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::event::{RequestOutcome, TimerId};
-use crate::messages::{HubToTapMessage, TapClientHello};
+use crate::messages::{HubToTapMessage, ProbeResult, TapClientHello};
 use crate::model::RequestId;
 
 /// Something the caller must do on the state machine's behalf.
@@ -25,6 +25,14 @@ pub enum HubAction {
     CompleteRequest {
         request_id: RequestId,
         outcome: RequestOutcome,
+    },
+
+    /// A probe reached a terminal state. `result` is `None` when the tap never
+    /// answered — which is a verdict in itself, and the one an un-upgraded tap
+    /// must never be given for free.
+    ProbeCompleted {
+        probe_id: u64,
+        result: Option<ProbeResult>,
     },
 
     /// Close the connection. The reason is for logging, not the wire — it is

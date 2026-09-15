@@ -85,7 +85,8 @@ async fn serve_once(
         selection_weight: cfg.selection_weight,
         resuming,
     });
-    sink.send(Message::Binary(codec::encode_to_hub(&hello)?)).await?;
+    sink.send(Message::Binary(codec::encode_to_hub(&hello)?))
+        .await?;
 
     let (up_tx, mut up_rx) = mpsc::channel::<Upstream>(64);
 
@@ -134,7 +135,30 @@ async fn serve_once(
                 break Err(SdkError::Rejected(reject.reason));
             }
             HubToTapMessage::Ping { nonce } => {
-                let _ = up_tx.send(Upstream::Message(TapToHubMessage::Pong { nonce })).await;
+                let _ = up_tx
+                    .send(Upstream::Message(TapToHubMessage::Pong { nonce }))
+                    .await;
+            }
+            // Spawned rather than awaited: a probe synthesizes, which takes
+            // real time, and doing it here would stall this connection's
+            // heartbeats and every request behind it. The hub is timing the
+            // probe, so it must not also be blocked by it.
+            HubToTapMessage::Probe { probe_id } => {
+                if !accepted {
+                    tracing::warn!("hub sent a probe before accepting us");
+                    continue;
+                }
+                let handler = Arc::clone(&handler);
+                let up = up_tx.clone();
+                tokio::spawn(async move {
+                    let result = handler.probe().await;
+                    let _ = up
+                        .send(Upstream::Message(TapToHubMessage::ProbeResult {
+                            probe_id,
+                            result,
+                        }))
+                        .await;
+                });
             }
             HubToTapMessage::Cancel { request_id } => {
                 if let Some(h) = cancels.remove(&request_id) {
@@ -241,7 +265,10 @@ async fn serve_audio(
     streaming.lock().await.retain(|id| *id != request_id);
 
     let _ = up
-        .send(Upstream::Message(TapToHubMessage::StreamOutcome { request_id, outcome }))
+        .send(Upstream::Message(TapToHubMessage::StreamOutcome {
+            request_id,
+            outcome,
+        }))
         .await;
 }
 
@@ -263,7 +290,9 @@ async fn pump(
     {
         Ok(s) => s,
         Err(e) => {
-            return StreamOutcome::Undeliverable { reason: e.to_string() };
+            return StreamOutcome::Undeliverable {
+                reason: e.to_string(),
+            };
         }
     };
 
@@ -276,14 +305,20 @@ async fn pump(
             .send_frame(TimestampMs(frame.ts_ms), frame.payload.to_vec())
             .await
         {
-            return StreamOutcome::Aborted { frames_sent: sent, reason: e.to_string() };
+            return StreamOutcome::Aborted {
+                frames_sent: sent,
+                reason: e.to_string(),
+            };
         }
         sent += 1;
     }
 
     match sender.finish().await {
         Ok(()) => StreamOutcome::Completed { frames_sent: sent },
-        Err(e) => StreamOutcome::Aborted { frames_sent: sent, reason: e.to_string() },
+        Err(e) => StreamOutcome::Aborted {
+            frames_sent: sent,
+            reason: e.to_string(),
+        },
     }
 }
 

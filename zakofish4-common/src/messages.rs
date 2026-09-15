@@ -11,7 +11,14 @@ use crate::model::{
 /// run by third parties and cannot be upgraded in lockstep — and it is the one
 /// field that genuinely cannot be added later, since without it the hub has no
 /// way to tell an old tap from a malformed one.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// Version 2 added [`HubToTapMessage::Probe`]. The message itself is additive,
+/// so a v1 tap that receives one simply fails to decode it and ignores the
+/// frame — which is fine, except that the hub cannot tell that apart from a tap
+/// that is wedged, and would mark every un-upgraded tap unhealthy. The version
+/// is therefore what the hub gates probing on: it probes v2 and above, and
+/// leaves v1 taps exactly as they were.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -154,12 +161,33 @@ pub enum HubToTapMessage {
     /// happily stream a whole track into a dead session. Best-effort: if the
     /// WebSocket is down the sink simply stops acknowledging and the tap's own
     /// watchdog tears the transfer down instead.
-    Cancel { request_id: RequestId },
+    Cancel {
+        request_id: RequestId,
+    },
 
     /// Liveness probe. A black-holed TCP connection is invisible to the
     /// WebSocket layer, and undetected disconnects are the exact problem this
     /// protocol exists to fix, so the check is explicit.
-    Ping { nonce: u64 },
+    Ping {
+        nonce: u64,
+    },
+
+    /// Ask the tap to prove it can still synthesize, without involving a sink.
+    ///
+    /// `Ping` proves the application loop is alive and nothing more. A tap
+    /// whose script engine, cache or encoder has wedged answers `Pong` happily
+    /// and then fails every request, which is exactly the state a retry cannot
+    /// see and a listener experiences as silence. So the hub has to ask.
+    ///
+    /// The tap is expected to synthesize a short fixed phrase, report how long
+    /// the first sample took, and throw the audio away. It must not send
+    /// anything over the network: there is no sink and no `deliver_to`.
+    ///
+    /// `probe_id` is only a handle for the answer, in the same spirit as
+    /// `Ping`'s nonce.
+    Probe {
+        probe_id: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,5 +205,31 @@ pub enum TapToHubMessage {
         outcome: StreamOutcome,
     },
 
-    Pong { nonce: u64 },
+    Pong {
+        nonce: u64,
+    },
+
+    /// The answer to [`HubToTapMessage::Probe`].
+    ProbeResult {
+        probe_id: u64,
+        result: ProbeResult,
+    },
+}
+
+/// What a tap found when it tried to prove it can synthesize.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeResult {
+    /// It synthesized; this is how long the first sample took.
+    Ready { time_to_first_sample_ms: u64 },
+
+    /// It tried and could not. The hub deprioritises the connection.
+    Failed { reason: String },
+
+    /// It does not implement the probe.
+    ///
+    /// Deliberately not a failure. A tap that has no opinion must be left alone
+    /// rather than taken out of service — there is nothing to route to instead.
+    Unsupported,
 }

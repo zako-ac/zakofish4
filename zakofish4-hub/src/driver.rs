@@ -137,9 +137,7 @@ where
             }
 
             // Announce exactly once, the moment the tap becomes usable.
-            if !announced
-                && let TapState::Authenticated { hello, .. } = &state
-            {
+            if !announced && let TapState::Authenticated { hello, .. } = &state {
                 announced = true;
                 span.record("tap_id", tracing::field::display(&hello.tap_id));
                 backend.on_authenticated(hello, handle.clone()).await;
@@ -161,11 +159,24 @@ where
         span.record("disconnect_reason", reason.as_str());
     }
 
+    // The same two actions the loop performs, applied to what the disconnect
+    // produced: a request that was still awaiting an answer, and a probe that
+    // was still outstanding.
     for action in state::on_disconnect(&state) {
-        if let HubAction::CompleteRequest { request_id, outcome } = action
-            && let Some(id) = tap_id.as_ref()
-        {
-            backend.on_complete(id, request_id, outcome).await;
+        let Some(id) = tap_id.as_ref() else {
+            continue;
+        };
+        match action {
+            HubAction::CompleteRequest {
+                request_id,
+                outcome,
+            } => {
+                backend.on_complete(id, request_id, outcome).await;
+            }
+            HubAction::ProbeCompleted { probe_id, result } => {
+                backend.on_probe_result(id, probe_id, result).await;
+            }
+            _ => {}
         }
     }
 
@@ -225,9 +236,18 @@ async fn apply<T, B>(
         HubAction::StartTimer(id, after) => timers.start(id, after),
         HubAction::CancelTimer(id) => timers.cancel(id),
 
-        HubAction::CompleteRequest { request_id, outcome } => {
+        HubAction::CompleteRequest {
+            request_id,
+            outcome,
+        } => {
             if let Some(tap_id) = state.tap_id() {
                 backend.on_complete(tap_id, request_id, outcome).await;
+            }
+        }
+
+        HubAction::ProbeCompleted { probe_id, result } => {
+            if let Some(tap_id) = state.tap_id() {
+                backend.on_probe_result(tap_id, probe_id, result).await;
             }
         }
 

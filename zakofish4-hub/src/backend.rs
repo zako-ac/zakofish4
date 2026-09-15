@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use zakofish4_common::action::DisconnectReason;
 use zakofish4_common::event::RequestOutcome;
-use zakofish4_common::messages::{TapClientHello, TapServerReject};
+use zakofish4_common::messages::{ProbeResult, TapClientHello, TapServerReject};
 use zakofish4_common::model::{RequestId, TapId};
 
 use crate::handle::TapHandle;
@@ -24,6 +24,19 @@ pub trait HubBackend: Send + Sync + 'static {
 
     /// A request reached a terminal state. Resolve whoever was waiting.
     async fn on_complete(&self, tap_id: &TapId, request_id: RequestId, outcome: RequestOutcome);
+
+    /// A probe reached a terminal state.
+    ///
+    /// `result` is `None` when the tap never answered within
+    /// [`zakofish4_common::config::HubConfig::probe_timeout`], or when the
+    /// connection ended while the probe was outstanding.
+    ///
+    /// Defaulted to doing nothing so that adding the probe did not break every
+    /// existing backend; a backend that routes on health must override it, and
+    /// a backend that does not simply has no health to route on.
+    async fn on_probe_result(&self, tap_id: &TapId, probe_id: u64, result: Option<ProbeResult>) {
+        let _ = (tap_id, probe_id, result);
+    }
 
     /// The connection ended.
     ///

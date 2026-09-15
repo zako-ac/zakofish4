@@ -23,6 +23,7 @@ struct Recorder {
     accept: bool,
     handle_tx: Mutex<Option<mpsc::Sender<TapHandle>>>,
     completed: Mutex<Vec<(RequestId, String)>>,
+    probes: Mutex<Vec<(u64, String)>>,
     disconnected: Mutex<Option<Option<DisconnectReason>>>,
     done_tx: Mutex<Option<mpsc::Sender<()>>>,
 }
@@ -55,6 +56,18 @@ impl HubBackend for Recorder {
             RequestOutcome::Streamed(_) => "streamed",
         };
         self.completed.lock().unwrap().push((request_id, tag.into()));
+    }
+
+    async fn on_probe_result(&self, _tap: &TapId, probe_id: u64, result: Option<ProbeResult>) {
+        let tag = match result {
+            Some(ProbeResult::Ready {
+                time_to_first_sample_ms,
+            }) => format!("ready:{time_to_first_sample_ms}"),
+            Some(ProbeResult::Failed { reason }) => format!("failed:{reason}"),
+            Some(ProbeResult::Unsupported) => "unsupported".to_string(),
+            None => "unanswered".to_string(),
+        };
+        self.probes.lock().unwrap().push((probe_id, tag));
     }
 
     async fn on_disconnected(&self, _tap: Option<&TapId>, reason: Option<DisconnectReason>) {
@@ -357,4 +370,58 @@ async fn cancelling_reaches_the_tap() {
         panic!("expected Cancel");
     };
     assert_eq!(request_id, id);
+}
+
+// --- probes ----------------------------------------------------------------
+
+/// A probe has to survive the whole way out and back: the backend learns the
+/// tap's own answer, not a timeout, or every healthy tap looks wedged.
+#[tokio::test]
+async fn a_probe_reaches_the_tap_and_its_report_comes_back() {
+    let mut h = start(true, slow_heartbeat());
+    h.send(hello()).await;
+    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    let handle = h.handles.recv().await.unwrap();
+
+    assert!(handle.probe(11));
+
+    let Some(HubToTapMessage::Probe { probe_id }) = h.recv_skipping_pings().await else {
+        panic!("expected a Probe");
+    };
+    assert_eq!(probe_id, 11);
+
+    h.send(TapToHubMessage::ProbeResult {
+        probe_id: 11,
+        result: ProbeResult::Ready {
+            time_to_first_sample_ms: 250,
+        },
+    })
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        h.backend.probes.lock().unwrap().clone(),
+        vec![(11, "ready:250".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn a_probe_the_tap_never_answers_is_reported_as_unanswered() {
+    let cfg = HubConfig {
+        probe_timeout: Duration::from_millis(80),
+        ..slow_heartbeat()
+    };
+    let mut h = start(true, cfg);
+    h.send(hello()).await;
+    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    let handle = h.handles.recv().await.unwrap();
+
+    handle.probe(4);
+    let _ = h.recv_skipping_pings().await;
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert_eq!(
+        h.backend.probes.lock().unwrap().clone(),
+        vec![(4, "unanswered".to_string())]
+    );
 }
