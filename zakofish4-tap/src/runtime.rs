@@ -32,6 +32,10 @@ pub(crate) struct Config {
     pub pacing_lead: Duration,
     pub reconnect_min: Duration,
     pub reconnect_max: Duration,
+    /// How long this connection may go without a single frame from the hub
+    /// before it is treated as gone. Must be comfortably longer than the hub's
+    /// `heartbeat_interval`, which is how often it pings.
+    pub idle_timeout: Duration,
 }
 
 /// Messages the transfer tasks send back up to the socket writer.
@@ -122,7 +126,23 @@ async fn serve_once(
     let mut accepted = false;
 
     let result = loop {
-        let Some(frame) = stream.next().await else {
+        let frame = tokio::select! {
+            frame = stream.next() => frame,
+            () = tokio::time::sleep(cfg.idle_timeout) => {
+                // A connection the hub has dropped but this side never saw go
+                // — a black-holed path — leaves a socket that still reads as
+                // open and a read half that never wakes. The hub pings, so
+                // silence is evidence in itself: without this the tap sits
+                // here for good while the hub has long since forgotten it, and
+                // the pod looks healthy the whole time.
+                tracing::warn!(
+                    idle = ?cfg.idle_timeout,
+                    "no frame from the hub; treating the connection as gone"
+                );
+                break Err(SdkError::Idle(cfg.idle_timeout));
+            }
+        };
+        let Some(frame) = frame else {
             break Ok(());
         };
         let msg = match frame {
