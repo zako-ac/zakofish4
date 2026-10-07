@@ -89,11 +89,25 @@ async fn serve_once(
         .await?;
 
     let (up_tx, mut up_rx) = mpsc::channel::<Upstream>(64);
+    // The writer ends when the connection does, not when the last sender is
+    // dropped. A request whose yt-dlp or ffmpeg child never exits keeps its
+    // sender for good, and `run` waiting on a writer that is waiting for that
+    // sender is what turned a dropped socket into a tap that never came back:
+    // the process stayed up, its healthcheck kept answering, and `serve_once`
+    // never returned to reconnect.
+    let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
 
     // One task owns the write half, so transfer tasks and the read loop can
     // both talk to the hub without sharing a lock over the socket.
     let writer = tokio::spawn(async move {
-        while let Some(Upstream::Message(msg)) = up_rx.recv().await {
+        loop {
+            let next = tokio::select! {
+                _ = &mut stop_rx => break,
+                next = up_rx.recv() => next,
+            };
+            let Some(Upstream::Message(msg)) = next else {
+                break;
+            };
             let Ok(bytes) = codec::encode_to_hub(&msg) else {
                 continue;
             };
@@ -185,6 +199,9 @@ async fn serve_once(
     };
 
     drop(up_tx);
+    // The read half is done, so this socket is finished, whatever is still
+    // holding a sender. Releases the socket and lets `run` reconnect.
+    let _ = stop_tx.send(());
     let _ = writer.await;
     result
 }

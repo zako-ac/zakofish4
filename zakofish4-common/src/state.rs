@@ -384,6 +384,13 @@ fn handle_authenticated(
                 && tracked.phase == Phase::AwaitingResponse
             {
                 outstanding.remove(&request_id);
+                // The caller has given up, so the tap must too: without this it
+                // keeps a download or an encode running for an answer nobody is
+                // waiting for, and then sends it. Cancelling also means the tap
+                // stops before it can race the timeout at all.
+                actions.push(HubAction::SendMessageToTap(HubToTapMessage::Cancel {
+                    request_id,
+                }));
                 actions.push(HubAction::CompleteRequest {
                     request_id,
                     outcome: RequestOutcome::TimedOut,
@@ -430,7 +437,15 @@ fn on_response(
     actions: &mut Vec<HubAction>,
 ) -> Result<(), HubError> {
     let Some(tracked) = outstanding.get(&response.request_id).cloned() else {
-        return Err(HubError::InvalidRequestId(response.request_id));
+        // The hub produces this situation itself: a request that times out (or
+        // is cancelled) is removed from `outstanding` while the tap is still
+        // working on it, so its answer arrives with nothing to match it. That
+        // is late, not wrong — and unlike a wrong-kind or duplicate answer it
+        // says nothing about whether the two sides agree about what is in
+        // flight. Dropping a working connection over it is how one slow
+        // metadata lookup took a whole tap off the air until someone
+        // restarted it. Ignored, the same way a late probe answer is.
+        return Ok(());
     };
 
     // A tap answering a metadata request with audio (or the reverse) means the

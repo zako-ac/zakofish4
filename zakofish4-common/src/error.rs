@@ -9,9 +9,6 @@ pub enum HubError {
     #[error("Unauthorized")]
     Unauthorized,
 
-    #[error("No request is outstanding with id {0}")]
-    InvalidRequestId(crate::model::RequestId),
-
     #[error("Tap speaks protocol version {got}, hub serves {supported}")]
     UnsupportedVersion { got: u32, supported: u32 },
 }
