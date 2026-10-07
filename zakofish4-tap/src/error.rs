@@ -40,6 +40,12 @@ pub enum SdkError {
     #[error("websocket error: {0}")]
     WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
 
+    /// Nothing arrived from the hub for the whole idle window. The socket may
+    /// still look open — a black-holed path leaves it `ESTABLISHED` on this
+    /// side — but a hub that has stopped talking has stopped serving us.
+    #[error("no frame from the hub for {0:?}")]
+    Idle(std::time::Duration),
+
     #[error("codec error: {0}")]
     Codec(#[from] zakofish4_common::codec::CodecError),
 

@@ -21,6 +21,7 @@ pub struct TapBuilder {
     pacing_lead: Duration,
     reconnect_min: Duration,
     reconnect_max: Duration,
+    idle_timeout: Duration,
     #[cfg(feature = "healthcheck")]
     healthcheck_port: Option<u16>,
 }
@@ -38,6 +39,11 @@ impl Default for TapBuilder {
             pacing_lead: Duration::from_secs(4),
             reconnect_min: Duration::from_millis(500),
             reconnect_max: Duration::from_secs(30),
+            // Four times the hub's default `heartbeat_interval` of 15s: long
+            // enough that a slow-but-alive hub is never mistaken for a dead
+            // one, short enough that a black-holed connection is noticed in a
+            // minute rather than never.
+            idle_timeout: Duration::from_secs(60),
             #[cfg(feature = "healthcheck")]
             healthcheck_port: None,
         }
@@ -84,6 +90,18 @@ impl TapBuilder {
         self
     }
 
+    /// How long the connection may go without a frame from the hub before the
+    /// tap treats it as gone and reconnects.
+    ///
+    /// The hub pings, so silence is a liveness signal in itself: a tap whose
+    /// path to the hub is black-holed keeps a socket that still looks open and
+    /// would otherwise never reconnect. Keep this well above the hub's
+    /// `heartbeat_interval`.
+    pub fn idle_timeout(mut self, idle: Duration) -> Self {
+        self.idle_timeout = idle;
+        self
+    }
+
     /// Serve `GET /health` on this port, for an orchestrator's probes.
     ///
     /// It reports the process, not the hub connection: the SDK reconnects with
@@ -109,6 +127,7 @@ impl TapBuilder {
             pacing_lead: self.pacing_lead,
             reconnect_min: self.reconnect_min,
             reconnect_max: self.reconnect_max,
+            idle_timeout: self.idle_timeout,
         };
         #[cfg(feature = "healthcheck")]
         if let Some(port) = self.healthcheck_port {

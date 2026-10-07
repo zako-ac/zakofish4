@@ -321,12 +321,45 @@ fn a_refused_audio_request_is_finished_immediately() {
     assert!(state.outstanding_ids().is_empty());
 }
 
+/// The hub creates this situation itself: a request it has given up on is gone
+/// from `outstanding` while the tap is still working, so the tap's answer
+/// arrives with nothing to match it. That is late, not wrong, and dropping a
+/// working connection over it is what took the YouTube tap off the air.
 #[test]
-fn a_response_to_an_unknown_request_is_rejected() {
+fn a_response_to_an_already_timed_out_request_is_ignored() {
+    let cfg = HubConfig::default();
+    let state = authenticated(&cfg);
+    let id = RequestId::random();
+    let (state, _) =
+        handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
+    let (state, _) =
+        handle_event(state, HubEvent::TimerFired(TimerId::Request(id)), &cfg).unwrap();
+
+    let (state, actions) = handle_event(
+        state,
+        HubEvent::MessageFromTap(TapToHubMessage::Response(Response {
+            request_id: id,
+            variant: audio_success(),
+        })),
+        &cfg,
+    )
+    .unwrap();
+
+    assert!(
+        completions(&actions).is_empty(),
+        "the request was already reported as timed out"
+    );
+    assert!(state.outstanding_ids().is_empty());
+}
+
+/// A response for a request this connection never dispatched — a stale answer
+/// from a previous connection — is equally not worth dropping the socket for.
+#[test]
+fn a_response_to_an_unknown_request_is_ignored() {
     let cfg = HubConfig::default();
     let state = authenticated(&cfg);
 
-    let err = handle_event(
+    let (state, actions) = handle_event(
         state,
         HubEvent::MessageFromTap(TapToHubMessage::Response(Response {
             request_id: RequestId::random(),
@@ -334,9 +367,10 @@ fn a_response_to_an_unknown_request_is_rejected() {
         })),
         &cfg,
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert!(matches!(err, HubError::InvalidRequestId(_)));
+    assert!(completions(&actions).is_empty());
+    assert!(state.outstanding_ids().is_empty());
 }
 
 /// Answering a metadata question with audio means the two sides disagree about
@@ -395,6 +429,12 @@ fn a_request_that_is_never_answered_times_out() {
         handle_event(state, HubEvent::TimerFired(TimerId::Request(id)), &cfg).unwrap();
 
     assert_eq!(completions(&actions), vec![(id, "timed_out".into())]);
+    // And the tap is told to stop, so it cannot finish work nobody is waiting
+    // for and then answer a request the hub no longer knows about.
+    assert!(matches!(
+        sent(&actions).as_slice(),
+        [HubToTapMessage::Cancel { request_id }] if *request_id == id
+    ));
     assert!(state.outstanding_ids().is_empty());
 }
 

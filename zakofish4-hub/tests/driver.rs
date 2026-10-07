@@ -332,11 +332,17 @@ async fn undecodable_frames_end_the_connection() {
     );
 }
 
+/// An answer for a request this connection never dispatched — a stale answer
+/// from an earlier connection — must not cost the tap its socket. The hub
+/// produces this situation itself (a request that timed out is dropped from
+/// `outstanding` while the tap is still working), and reading it as a protocol
+/// violation is what took the YouTube tap off the air until it was restarted.
 #[tokio::test]
-async fn a_response_to_an_unknown_request_ends_the_connection() {
+async fn a_response_to_an_unknown_request_is_ignored() {
     let mut h = start(true, slow_heartbeat());
     h.send(hello()).await;
     assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    let handle = h.handles.recv().await.unwrap();
 
     h.send(TapToHubMessage::Response(Response {
         request_id: RequestId::random(),
@@ -347,11 +353,20 @@ async fn a_response_to_an_unknown_request_ends_the_connection() {
     }))
     .await;
 
-    h.done.recv().await;
-    assert_eq!(
-        *h.backend.disconnected.lock().unwrap(),
-        Some(Some(DisconnectReason::ProtocolViolation))
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), h.done.recv())
+            .await
+            .is_err(),
+        "an answer nobody is waiting for must not disconnect the tap"
     );
+
+    // Still connected, and still serving.
+    let id = RequestId::random();
+    assert!(handle.dispatch(audio_request(id)));
+    let Some(HubToTapMessage::Request(req)) = h.recv_skipping_pings().await else {
+        panic!("expected a Request on the same connection");
+    };
+    assert_eq!(req.request_id, id);
 }
 
 #[tokio::test]
@@ -424,4 +439,57 @@ async fn a_probe_the_tap_never_answers_is_reported_as_unanswered() {
         h.backend.probes.lock().unwrap().clone(),
         vec![(4, "unanswered".to_string())]
     );
+}
+
+/// A tap that answers after its request timed out must keep its connection.
+///
+/// The hub itself creates the situation — the request timer removes the
+/// request while the tap is still working — so reading the answer as a
+/// protocol violation and closing the socket is what took the YouTube tap
+/// down until someone restarted it.
+#[tokio::test]
+async fn answering_after_a_timeout_does_not_drop_the_connection() {
+    let mut h = start(true, slow_heartbeat());
+    h.send(hello()).await;
+    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    let handle = h.handles.recv().await.unwrap();
+
+    // `audio_request` times out after 200 ms.
+    let id = RequestId::random();
+    assert!(handle.dispatch(audio_request(id)));
+    let Some(HubToTapMessage::Request(req)) = h.recv_skipping_pings().await else {
+        panic!("expected a Request");
+    };
+    assert_eq!(req.request_id, id);
+
+    // The hub gives up and tells the tap to stop.
+    let Some(HubToTapMessage::Cancel { request_id }) = h.recv_skipping_pings().await else {
+        panic!("expected a Cancel once the request timed out");
+    };
+    assert_eq!(request_id, id);
+
+    // The tap answers anyway, late.
+    h.send(TapToHubMessage::Response(Response {
+        request_id: id,
+        variant: ResponseVariant::AudioRequestSuccess(AudioRequestSuccessMessage {
+            cache: AudioCachePolicy { cache_type: AudioCacheType::ARHash, ttl_seconds: None },
+            duration_secs: Some(1.0),
+            metadatas: AttachedMetadata::UseCached,
+        }),
+    }))
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        h.backend.disconnected.lock().unwrap().is_none(),
+        "a late answer must not disconnect the tap"
+    );
+
+    // And the connection still works: a second request reaches the tap.
+    let second = RequestId::random();
+    assert!(handle.dispatch(audio_request(second)));
+    let Some(HubToTapMessage::Request(req)) = h.recv_skipping_pings().await else {
+        panic!("expected a second Request on the same connection");
+    };
+    assert_eq!(req.request_id, second);
 }

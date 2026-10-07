@@ -352,6 +352,44 @@ async fn a_tap_refusal_reaches_the_hub_with_its_reason() {
     );
 }
 
+/// A hub that goes quiet without closing the socket — a black hole — must not
+/// leave the tap believing it is connected. On 2026-10-03 the hub dropped four
+/// tap connections as `heartbeat_timeout` and the taps never noticed: their
+/// sockets stayed `ESTABLISHED` and the pods stayed up, silently dark.
+#[tokio::test]
+async fn a_hub_that_goes_silent_is_given_up_on() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let _ = tap()
+            .hub(format!("ws://{addr}/gateway"))
+            .tap_id("tap-1")
+            .friendly_name("Test Tap")
+            .api_token("zk_good")
+            .idle_timeout(Duration::from_millis(300))
+            .run(Arc::new(TestTap))
+            .await;
+    });
+
+    // First connection: finish the WebSocket handshake, read the hello, then
+    // say nothing at all while holding the socket open.
+    let (socket, _) = listener.accept().await.unwrap();
+    let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+    assert!(ws.next().await.is_some(), "the tap should send a hello");
+    tokio::spawn(async move {
+        let _hold = ws;
+        std::future::pending::<()>().await;
+    });
+
+    // The tap gives up on the silence and dials again.
+    let again = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await;
+    assert!(
+        again.is_ok(),
+        "a tap that hears nothing must stop believing it is connected"
+    );
+}
+
 /// A sink that never arms leaves the tap unable to deliver. It must say so
 /// rather than hanging, so the hub can try elsewhere.
 #[tokio::test]
