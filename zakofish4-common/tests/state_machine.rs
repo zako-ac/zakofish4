@@ -49,7 +49,10 @@ fn metadata_request(id: RequestId) -> PendingRequest {
 
 fn audio_success() -> ResponseVariant {
     ResponseVariant::AudioRequestSuccess(AudioRequestSuccessMessage {
-        cache: AudioCachePolicy { cache_type: AudioCacheType::ARHash, ttl_seconds: Some(300) },
+        cache: AudioCachePolicy {
+            cache_type: AudioCacheType::ARHash,
+            ttl_seconds: Some(300),
+        },
         duration_secs: Some(210.0),
         metadatas: AttachedMetadata::Metadatas(vec![AudioMetadata::Title("Song".into())]),
     })
@@ -75,7 +78,10 @@ fn completions(actions: &[HubAction]) -> Vec<(RequestId, String)> {
     actions
         .iter()
         .filter_map(|a| match a {
-            HubAction::CompleteRequest { request_id, outcome } => {
+            HubAction::CompleteRequest {
+                request_id,
+                outcome,
+            } => {
                 let tag = match outcome {
                     RequestOutcome::Answered(_) => "answered",
                     RequestOutcome::TimedOut => "timed_out",
@@ -122,7 +128,11 @@ fn hello_triggers_a_credential_check() {
     .unwrap();
 
     assert!(matches!(state, TapState::Validating { .. }));
-    assert!(actions.iter().any(|a| matches!(a, HubAction::ValidateCredential(_))));
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, HubAction::ValidateCredential(_)))
+    );
     // The deadline must be released, or a slow credential check kills the
     // connection it just approved.
     assert!(
@@ -156,22 +166,31 @@ fn rejecting_sends_reject_then_disconnects() {
     let (state, actions) = handle_event(state, HubEvent::TapRejected(reject), &cfg).unwrap();
 
     assert!(matches!(state, TapState::Anonymous));
-    assert!(matches!(sent(&actions).as_slice(), [HubToTapMessage::Reject(_)]));
-    assert!(actions.iter().any(|a| matches!(
-        a,
-        HubAction::Disconnect(DisconnectReason::Unauthorized)
-    )));
+    assert!(matches!(
+        sent(&actions).as_slice(),
+        [HubToTapMessage::Reject(_)]
+    ));
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, HubAction::Disconnect(DisconnectReason::Unauthorized)))
+    );
 }
 
 #[test]
 fn silent_client_is_dropped_on_the_handshake_deadline() {
     let cfg = HubConfig::default();
-    let (_, actions) =
-        handle_event(TapState::new(), HubEvent::TimerFired(TimerId::Handshake), &cfg).unwrap();
-    assert!(actions.iter().any(|a| matches!(
-        a,
-        HubAction::Disconnect(DisconnectReason::HandshakeTimeout)
-    )));
+    let (_, actions) = handle_event(
+        TapState::new(),
+        HubEvent::TimerFired(TimerId::Handshake),
+        &cfg,
+    )
+    .unwrap();
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, HubAction::Disconnect(DisconnectReason::HandshakeTimeout)))
+    );
 }
 
 #[test]
@@ -202,7 +221,10 @@ fn a_newer_protocol_version_is_refused_cleanly() {
     .unwrap();
 
     assert!(matches!(state, TapState::Anonymous));
-    assert!(matches!(sent(&actions).as_slice(), [HubToTapMessage::Reject(_)]));
+    assert!(matches!(
+        sent(&actions).as_slice(),
+        [HubToTapMessage::Reject(_)]
+    ));
     assert!(actions.iter().any(|a| matches!(
         a,
         HubAction::Disconnect(DisconnectReason::UnsupportedVersion)
@@ -220,7 +242,10 @@ fn dispatch_sends_the_request_and_arms_its_deadline() {
     let (state, actions) =
         handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
 
-    assert!(matches!(sent(&actions).as_slice(), [HubToTapMessage::Request(_)]));
+    assert!(matches!(
+        sent(&actions).as_slice(),
+        [HubToTapMessage::Request(_)]
+    ));
     assert!(actions.iter().any(|a| matches!(
         a,
         HubAction::StartTimer(TimerId::Request(r), _) if *r == id
@@ -240,7 +265,10 @@ fn a_response_completes_the_request_and_cancels_its_timer() {
         request_id: id,
         variant: ResponseVariant::AudioMetadataSuccess(AudioMetadataSuccessMessage {
             metadatas: vec![AudioMetadata::Title("Song".into())],
-            cache: AudioCachePolicy { cache_type: AudioCacheType::None, ttl_seconds: None },
+            cache: AudioCachePolicy {
+                cache_type: AudioCacheType::None,
+                ttl_seconds: None,
+            },
         }),
     };
     let (state, actions) = handle_event(
@@ -266,7 +294,8 @@ fn an_accepted_audio_request_stays_outstanding_while_it_streams() {
     let cfg = HubConfig::default();
     let state = authenticated(&cfg);
     let id = RequestId::random();
-    let (state, _) = handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
+    let (state, _) =
+        handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
 
     let (state, actions) = handle_event(
         state,
@@ -286,7 +315,9 @@ fn an_accepted_audio_request_stays_outstanding_while_it_streams() {
         state,
         HubEvent::MessageFromTap(TapToHubMessage::StreamOutcome {
             request_id: id,
-            outcome: StreamOutcome::Completed { frames_sent: 10_500 },
+            outcome: StreamOutcome::Completed {
+                frames_sent: 10_500,
+            },
         }),
         &cfg,
     )
@@ -302,7 +333,8 @@ fn a_refused_audio_request_is_finished_immediately() {
     let cfg = HubConfig::default();
     let state = authenticated(&cfg);
     let id = RequestId::random();
-    let (state, _) = handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
+    let (state, _) =
+        handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
 
     let (state, actions) = handle_event(
         state,
@@ -332,8 +364,7 @@ fn a_response_to_an_already_timed_out_request_is_ignored() {
     let id = RequestId::random();
     let (state, _) =
         handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
-    let (state, _) =
-        handle_event(state, HubEvent::TimerFired(TimerId::Request(id)), &cfg).unwrap();
+    let (state, _) = handle_event(state, HubEvent::TimerFired(TimerId::Request(id)), &cfg).unwrap();
 
     let (state, actions) = handle_event(
         state,
@@ -401,7 +432,8 @@ fn a_duplicate_response_is_rejected() {
     let cfg = HubConfig::default();
     let state = authenticated(&cfg);
     let id = RequestId::random();
-    let (state, _) = handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
+    let (state, _) =
+        handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
 
     let respond = |s: TapState| {
         handle_event(
@@ -415,7 +447,10 @@ fn a_duplicate_response_is_rejected() {
     };
 
     let (state, _) = respond(state).unwrap();
-    assert!(matches!(respond(state).unwrap_err(), HubError::InvalidMessage(_)));
+    assert!(matches!(
+        respond(state).unwrap_err(),
+        HubError::InvalidMessage(_)
+    ));
 }
 
 #[test]
@@ -423,7 +458,8 @@ fn a_request_that_is_never_answered_times_out() {
     let cfg = HubConfig::default();
     let state = authenticated(&cfg);
     let id = RequestId::random();
-    let (state, _) = handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
+    let (state, _) =
+        handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
 
     let (state, actions) =
         handle_event(state, HubEvent::TimerFired(TimerId::Request(id)), &cfg).unwrap();
@@ -445,7 +481,8 @@ fn a_streaming_request_ignores_the_response_deadline() {
     let cfg = HubConfig::default();
     let state = authenticated(&cfg);
     let id = RequestId::random();
-    let (state, _) = handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
+    let (state, _) =
+        handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
     let (state, _) = handle_event(
         state,
         HubEvent::MessageFromTap(TapToHubMessage::Response(Response {
@@ -459,7 +496,10 @@ fn a_streaming_request_ignores_the_response_deadline() {
     let (state, actions) =
         handle_event(state, HubEvent::TimerFired(TimerId::Request(id)), &cfg).unwrap();
 
-    assert!(completions(&actions).is_empty(), "a streaming request must not be timed out");
+    assert!(
+        completions(&actions).is_empty(),
+        "a streaming request must not be timed out"
+    );
     assert_eq!(state.outstanding_ids(), vec![id]);
 }
 
@@ -468,7 +508,8 @@ fn cancelling_tells_the_tap_to_stop() {
     let cfg = HubConfig::default();
     let state = authenticated(&cfg);
     let id = RequestId::random();
-    let (state, _) = handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
+    let (state, _) =
+        handle_event(state, HubEvent::DispatchRequest(audio_request(id)), &cfg).unwrap();
 
     let (state, actions) = handle_event(state, HubEvent::CancelRequest(id), &cfg).unwrap();
 
@@ -492,8 +533,12 @@ fn disconnect_fails_pending_requests_but_spares_streaming_ones() {
     let streaming = RequestId::random();
     let waiting = RequestId::random();
 
-    let (state, _) =
-        handle_event(state, HubEvent::DispatchRequest(audio_request(streaming)), &cfg).unwrap();
+    let (state, _) = handle_event(
+        state,
+        HubEvent::DispatchRequest(audio_request(streaming)),
+        &cfg,
+    )
+    .unwrap();
     let (state, _) = handle_event(
         state,
         HubEvent::MessageFromTap(TapToHubMessage::Response(Response {
@@ -503,11 +548,18 @@ fn disconnect_fails_pending_requests_but_spares_streaming_ones() {
         &cfg,
     )
     .unwrap();
-    let (state, _) =
-        handle_event(state, HubEvent::DispatchRequest(audio_request(waiting)), &cfg).unwrap();
+    let (state, _) = handle_event(
+        state,
+        HubEvent::DispatchRequest(audio_request(waiting)),
+        &cfg,
+    )
+    .unwrap();
 
     let actions = on_disconnect(&state);
-    assert_eq!(completions(&actions), vec![(waiting, "disconnected".into())]);
+    assert_eq!(
+        completions(&actions),
+        vec![(waiting, "disconnected".into())]
+    );
 }
 
 #[test]
@@ -585,11 +637,15 @@ fn heartbeat_pings_and_arms_a_deadline() {
     let (state, actions) =
         handle_event(state, HubEvent::TimerFired(TimerId::Heartbeat), &cfg).unwrap();
 
-    assert!(matches!(sent(&actions).as_slice(), [HubToTapMessage::Ping { .. }]));
-    assert!(actions.iter().any(|a| matches!(
-        a,
-        HubAction::StartTimer(TimerId::HeartbeatDeadline, _)
-    )));
+    assert!(matches!(
+        sent(&actions).as_slice(),
+        [HubToTapMessage::Ping { .. }]
+    ));
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, HubAction::StartTimer(TimerId::HeartbeatDeadline, _)))
+    );
 
     // A pong clears the deadline and schedules the next ping.
     let (_, actions) = handle_event(
@@ -614,13 +670,18 @@ fn heartbeat_pings_and_arms_a_deadline() {
 fn a_missing_pong_disconnects() {
     let cfg = HubConfig::default();
     let state = authenticated(&cfg);
-    let (_, actions) =
-        handle_event(state, HubEvent::TimerFired(TimerId::HeartbeatDeadline), &cfg).unwrap();
+    let (_, actions) = handle_event(
+        state,
+        HubEvent::TimerFired(TimerId::HeartbeatDeadline),
+        &cfg,
+    )
+    .unwrap();
 
-    assert!(actions.iter().any(|a| matches!(
-        a,
-        HubAction::Disconnect(DisconnectReason::HeartbeatTimeout)
-    )));
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, HubAction::Disconnect(DisconnectReason::HeartbeatTimeout)))
+    );
 }
 
 // --- probes ----------------------------------------------------------------
@@ -656,10 +717,11 @@ fn a_probe_is_sent_and_its_deadline_armed() {
         sent(&actions).as_slice(),
         [HubToTapMessage::Probe { probe_id: 7 }]
     ));
-    assert!(actions.iter().any(|a| matches!(
-        a,
-        HubAction::StartTimer(TimerId::Probe(7), _)
-    )));
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, HubAction::StartTimer(TimerId::Probe(7), _)))
+    );
 }
 
 #[test]
@@ -680,10 +742,11 @@ fn a_probe_answer_completes_the_probe_and_releases_its_timer() {
     .unwrap();
 
     assert_eq!(probes(&actions), vec![(7, "ready:412".to_string())]);
-    assert!(actions.iter().any(|a| matches!(
-        a,
-        HubAction::CancelTimer(TimerId::Probe(7))
-    )));
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, HubAction::CancelTimer(TimerId::Probe(7))))
+    );
 }
 
 /// The whole reason the probe exists: an unanswered one has to be a verdict,

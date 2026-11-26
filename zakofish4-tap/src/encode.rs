@@ -32,14 +32,23 @@ pub async fn decode_and_stream(
 
     let mut ffmpeg = Command::new("ffmpeg")
         .args([
-            "-v", "quiet", "-i", "pipe:0", "-vn", "-c:a", "libopus",
+            "-v",
+            "quiet",
+            "-i",
+            "pipe:0",
+            "-vn",
+            "-c:a",
+            "libopus",
             // Pinned rather than left to the default, because the frame index
             // below is turned into a timestamp by multiplying by 20 ms. Under
             // Zako4 that timestamp is the receiver's jitter-buffer key rather
             // than an opaque prefix, so a different frame duration would not be
             // a harmless mismatch — it would be audible.
-            "-frame_duration", "20",
-            "-f", "ogg", "pipe:1",
+            "-frame_duration",
+            "20",
+            "-f",
+            "ogg",
+            "pipe:1",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

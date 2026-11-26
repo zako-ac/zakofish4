@@ -46,6 +46,7 @@ pub mod error;
 pub mod handler;
 #[cfg(feature = "healthcheck")]
 mod healthcheck;
+pub mod metrics;
 mod runtime;
 pub mod source;
 pub mod stream;
@@ -55,6 +56,7 @@ pub use builder::{TapBuilder, tap};
 pub use encode::{EncodeError, decode_and_stream};
 pub use error::{SdkError, TapError};
 pub use handler::TapHandler;
+pub use metrics::{RequestKind, TapMetrics, TapSnapshot, unix_millis};
 pub use source::AudioSource;
 pub use stream::{AudioStreamSender, FRAME_MS};
 

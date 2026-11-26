@@ -15,7 +15,7 @@ healthcheck = ["dep:axum"]
 [dependencies]
 zakofish4-common = { path = "../zakofish4-common", version = "0.1.0" }
 protofish4 = { git = "https://github.com/zako-ac/protofish4-rs" }
-tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "process", "io-util"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "process", "io-util", "signal"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures = "0.3"
 async-trait = "0.1"

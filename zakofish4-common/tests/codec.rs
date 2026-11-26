@@ -29,7 +29,9 @@ fn hub_to_tap_messages_round_trip() {
             reason: "nope".into(),
         }),
         audio_request(),
-        HubToTapMessage::Cancel { request_id: RequestId::random() },
+        HubToTapMessage::Cancel {
+            request_id: RequestId::random(),
+        },
         HubToTapMessage::Ping { nonce: 0xDEAD_BEEF },
     ];
 
@@ -60,7 +62,9 @@ fn tap_to_hub_messages_round_trip() {
         }),
         TapToHubMessage::StreamOutcome {
             request_id: RequestId::random(),
-            outcome: StreamOutcome::Undeliverable { reason: "no route".into() },
+            outcome: StreamOutcome::Undeliverable {
+                reason: "no route".into(),
+            },
         },
         TapToHubMessage::Pong { nonce: 7 },
     ];
