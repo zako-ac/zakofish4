@@ -34,4 +34,6 @@ pub use messages::{
 pub use model::{
     AudioRequestString, DeliverTo, DiscordUserId, EncryptionKey, RequestId, StreamOutcome, TapId,
 };
-pub use state::{Kind, PendingRequest, Phase, TapState, Tracked, handle_event, on_connect, on_disconnect};
+pub use state::{
+    Kind, PendingRequest, Phase, TapState, Tracked, handle_event, on_connect, on_disconnect,
+};

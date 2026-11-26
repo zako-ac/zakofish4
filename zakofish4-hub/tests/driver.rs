@@ -55,7 +55,10 @@ impl HubBackend for Recorder {
             RequestOutcome::Disconnected => "disconnected",
             RequestOutcome::Streamed(_) => "streamed",
         };
-        self.completed.lock().unwrap().push((request_id, tag.into()));
+        self.completed
+            .lock()
+            .unwrap()
+            .push((request_id, tag.into()));
     }
 
     async fn on_probe_result(&self, _tap: &TapId, probe_id: u64, result: Option<ProbeResult>) {
@@ -100,13 +103,21 @@ fn start(accept: bool, cfg: HubConfig) -> Harness {
 
     tokio::spawn(serve(hub_side, Arc::clone(&backend), cfg));
 
-    Harness { tap: tap_side, backend, handles, done }
+    Harness {
+        tap: tap_side,
+        backend,
+        handles,
+        done,
+    }
 }
 
 impl Harness {
     async fn send(&mut self, msg: TapToHubMessage) {
         use zakofish4_hub::Transport;
-        self.tap.send(codec::encode_to_hub(&msg).unwrap()).await.unwrap();
+        self.tap
+            .send(codec::encode_to_hub(&msg).unwrap())
+            .await
+            .unwrap();
     }
 
     async fn recv(&mut self) -> Option<HubToTapMessage> {
@@ -164,8 +175,14 @@ async fn a_valid_tap_is_accepted_and_handed_back() {
     let mut h = start(true, slow_heartbeat());
     h.send(hello()).await;
 
-    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
-    assert!(h.handles.recv().await.is_some(), "backend should receive a handle");
+    assert!(matches!(
+        h.recv_skipping_pings().await,
+        Some(HubToTapMessage::Accept)
+    ));
+    assert!(
+        h.handles.recv().await.is_some(),
+        "backend should receive a handle"
+    );
 }
 
 #[tokio::test]
@@ -188,7 +205,10 @@ async fn a_rejected_tap_is_told_why_and_dropped() {
 async fn a_dispatched_request_reaches_the_tap_and_its_answer_comes_back() {
     let mut h = start(true, slow_heartbeat());
     h.send(hello()).await;
-    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    assert!(matches!(
+        h.recv_skipping_pings().await,
+        Some(HubToTapMessage::Accept)
+    ));
     let handle = h.handles.recv().await.unwrap();
 
     let id = RequestId::random();
@@ -202,7 +222,10 @@ async fn a_dispatched_request_reaches_the_tap_and_its_answer_comes_back() {
     h.send(TapToHubMessage::Response(Response {
         request_id: id,
         variant: ResponseVariant::AudioRequestSuccess(AudioRequestSuccessMessage {
-            cache: AudioCachePolicy { cache_type: AudioCacheType::ARHash, ttl_seconds: None },
+            cache: AudioCachePolicy {
+                cache_type: AudioCacheType::ARHash,
+                ttl_seconds: None,
+            },
             duration_secs: Some(1.0),
             metadatas: AttachedMetadata::UseCached,
         }),
@@ -229,7 +252,10 @@ async fn a_dispatched_request_reaches_the_tap_and_its_answer_comes_back() {
 async fn an_unanswered_request_times_out() {
     let mut h = start(true, slow_heartbeat());
     h.send(hello()).await;
-    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    assert!(matches!(
+        h.recv_skipping_pings().await,
+        Some(HubToTapMessage::Accept)
+    ));
     let handle = h.handles.recv().await.unwrap();
 
     let id = RequestId::random();
@@ -248,7 +274,10 @@ async fn an_unanswered_request_times_out() {
 async fn dropping_the_socket_spares_a_streaming_request() {
     let mut h = start(true, slow_heartbeat());
     h.send(hello()).await;
-    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    assert!(matches!(
+        h.recv_skipping_pings().await,
+        Some(HubToTapMessage::Accept)
+    ));
     let handle = h.handles.recv().await.unwrap();
 
     let streaming = RequestId::random();
@@ -259,7 +288,10 @@ async fn dropping_the_socket_spares_a_streaming_request() {
     h.send(TapToHubMessage::Response(Response {
         request_id: streaming,
         variant: ResponseVariant::AudioRequestSuccess(AudioRequestSuccessMessage {
-            cache: AudioCachePolicy { cache_type: AudioCacheType::None, ttl_seconds: None },
+            cache: AudioCachePolicy {
+                cache_type: AudioCacheType::None,
+                ttl_seconds: None,
+            },
             duration_secs: None,
             metadatas: AttachedMetadata::UseCached,
         }),
@@ -341,14 +373,20 @@ async fn undecodable_frames_end_the_connection() {
 async fn a_response_to_an_unknown_request_is_ignored() {
     let mut h = start(true, slow_heartbeat());
     h.send(hello()).await;
-    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    assert!(matches!(
+        h.recv_skipping_pings().await,
+        Some(HubToTapMessage::Accept)
+    ));
     let handle = h.handles.recv().await.unwrap();
 
     h.send(TapToHubMessage::Response(Response {
         request_id: RequestId::random(),
         variant: ResponseVariant::AudioMetadataSuccess(AudioMetadataSuccessMessage {
             metadatas: vec![],
-            cache: AudioCachePolicy { cache_type: AudioCacheType::None, ttl_seconds: None },
+            cache: AudioCachePolicy {
+                cache_type: AudioCacheType::None,
+                ttl_seconds: None,
+            },
         }),
     }))
     .await;
@@ -373,7 +411,10 @@ async fn a_response_to_an_unknown_request_is_ignored() {
 async fn cancelling_reaches_the_tap() {
     let mut h = start(true, slow_heartbeat());
     h.send(hello()).await;
-    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    assert!(matches!(
+        h.recv_skipping_pings().await,
+        Some(HubToTapMessage::Accept)
+    ));
     let handle = h.handles.recv().await.unwrap();
 
     let id = RequestId::random();
@@ -395,7 +436,10 @@ async fn cancelling_reaches_the_tap() {
 async fn a_probe_reaches_the_tap_and_its_report_comes_back() {
     let mut h = start(true, slow_heartbeat());
     h.send(hello()).await;
-    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    assert!(matches!(
+        h.recv_skipping_pings().await,
+        Some(HubToTapMessage::Accept)
+    ));
     let handle = h.handles.recv().await.unwrap();
 
     assert!(handle.probe(11));
@@ -428,7 +472,10 @@ async fn a_probe_the_tap_never_answers_is_reported_as_unanswered() {
     };
     let mut h = start(true, cfg);
     h.send(hello()).await;
-    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    assert!(matches!(
+        h.recv_skipping_pings().await,
+        Some(HubToTapMessage::Accept)
+    ));
     let handle = h.handles.recv().await.unwrap();
 
     handle.probe(4);
@@ -451,7 +498,10 @@ async fn a_probe_the_tap_never_answers_is_reported_as_unanswered() {
 async fn answering_after_a_timeout_does_not_drop_the_connection() {
     let mut h = start(true, slow_heartbeat());
     h.send(hello()).await;
-    assert!(matches!(h.recv_skipping_pings().await, Some(HubToTapMessage::Accept)));
+    assert!(matches!(
+        h.recv_skipping_pings().await,
+        Some(HubToTapMessage::Accept)
+    ));
     let handle = h.handles.recv().await.unwrap();
 
     // `audio_request` times out after 200 ms.
@@ -472,7 +522,10 @@ async fn answering_after_a_timeout_does_not_drop_the_connection() {
     h.send(TapToHubMessage::Response(Response {
         request_id: id,
         variant: ResponseVariant::AudioRequestSuccess(AudioRequestSuccessMessage {
-            cache: AudioCachePolicy { cache_type: AudioCacheType::ARHash, ttl_seconds: None },
+            cache: AudioCachePolicy {
+                cache_type: AudioCacheType::ARHash,
+                ttl_seconds: None,
+            },
             duration_secs: Some(1.0),
             metadatas: AttachedMetadata::UseCached,
         }),

@@ -15,6 +15,7 @@ use zakofish4_common::model::{RequestId, StreamOutcome};
 
 use crate::error::SdkError;
 use crate::handler::TapHandler;
+use crate::metrics::{RequestKind, TapMetrics};
 use crate::source::AudioSource;
 use crate::stream::{AudioStreamSender, OutFrame, Pacer};
 
@@ -36,6 +37,11 @@ pub(crate) struct Config {
     /// before it is treated as gone. Must be comfortably longer than the hub's
     /// `heartbeat_interval`, which is how often it pings.
     pub idle_timeout: Duration,
+    /// How long a drain signal may wait for the transfers already accepted to
+    /// finish before the process exits.
+    pub drain_timeout: Duration,
+    /// Request-path counters, shared with `/metrics` and `/health`.
+    pub metrics: Arc<TapMetrics>,
 }
 
 /// Messages the transfer tasks send back up to the socket writer.
@@ -43,17 +49,39 @@ enum Upstream {
     Message(TapToHubMessage),
 }
 
-/// Connect, serve, and keep reconnecting until the process ends.
+/// Connect, serve, and keep reconnecting until the process is asked to stop.
+///
+/// SIGTERM (and Ctrl-C) is a *drain*, not an exit: the hub stops routing to a
+/// closed connection immediately, while the audio already accepted keeps going
+/// straight to the sink, so the process has to stay alive long enough for those
+/// transfers to finish. Without this a rolling update or an HPA scale-down
+/// truncates playback mid-sentence — the listener hears silence for the rest of
+/// the track, and nothing in the tap or the hub records it as a drop.
 pub(crate) async fn run(cfg: Config, handler: Arc<dyn TapHandler>) -> Result<(), SdkError> {
     let mut backoff = cfg.reconnect_min;
     // Requests whose audio is still in flight. A dropped WebSocket does not
     // stop a transfer, so these are re-announced on the next connection and the
     // hub re-adopts them instead of orphaning them.
     let streaming: Arc<tokio::sync::Mutex<Vec<RequestId>>> = Default::default();
+    let mut shutting_down = Box::pin(shutdown_signal());
 
-    loop {
+    'serve: loop {
         let resuming = streaming.lock().await.clone();
-        match serve_once(&cfg, Arc::clone(&handler), Arc::clone(&streaming), resuming).await {
+        let served = tokio::select! {
+            _ = &mut shutting_down => {
+                tracing::info!("drain signal: closing the hub connection and finishing what is in flight");
+                break 'serve;
+            }
+            served = serve_once(
+                &cfg,
+                Arc::clone(&handler),
+                Arc::clone(&streaming),
+                resuming,
+                Arc::clone(&cfg.metrics),
+            ) => served,
+        };
+
+        match served {
             Ok(()) => {
                 tracing::info!("hub connection closed cleanly");
                 backoff = cfg.reconnect_min;
@@ -67,8 +95,73 @@ pub(crate) async fn run(cfg: Config, handler: Arc<dyn TapHandler>) -> Result<(),
             }
         }
 
-        tokio::time::sleep(backoff).await;
+        tokio::select! {
+            _ = &mut shutting_down => {
+                tracing::info!("drain signal while reconnecting; not reconnecting again");
+                break 'serve;
+            }
+            _ = tokio::time::sleep(backoff) => {}
+        }
         backoff = (backoff * 2).min(cfg.reconnect_max);
+    }
+
+    drain(&streaming, cfg.drain_timeout).await;
+    Ok(())
+}
+
+/// Resolves on SIGTERM or Ctrl-C — the two ways an orchestrator or an operator
+/// asks a tap to stop.
+///
+/// A process that never installs a SIGTERM handler dies on the default
+/// disposition, which is what made every rolling update cut audio.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(%e, "failed to install a SIGTERM handler; Ctrl-C only");
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = term.recv() => tracing::info!("SIGTERM"),
+            _ = tokio::signal::ctrl_c() => tracing::info!("SIGINT"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("ctrl-c");
+    }
+}
+
+/// Wait for the transfers already accepted to finish, up to `timeout`.
+///
+/// The hub connection is already closed by the time this runs, which is the
+/// point: the hub stops routing to us the moment it sees the socket go, while
+/// the audio already accepted is flowing straight from this process to the
+/// sink. Staying alive here is the difference between finishing the sentence
+/// and cutting it.
+async fn drain(streaming: &Arc<tokio::sync::Mutex<Vec<RequestId>>>, timeout: Duration) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let in_flight = streaming.lock().await.len();
+        if in_flight == 0 {
+            tracing::info!("drained; nothing left in flight");
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!(
+                in_flight,
+                ?timeout,
+                "drain timeout; exiting with transfers still in flight"
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -77,6 +170,7 @@ async fn serve_once(
     handler: Arc<dyn TapHandler>,
     streaming: Arc<tokio::sync::Mutex<Vec<RequestId>>>,
     resuming: Vec<RequestId>,
+    metrics: Arc<TapMetrics>,
 ) -> Result<(), SdkError> {
     let (ws, _) = tokio_tungstenite::connect_async(&cfg.hub_url).await?;
     let (mut sink, mut stream) = ws.split();
@@ -163,6 +257,7 @@ async fn serve_once(
         match msg {
             HubToTapMessage::Accept => {
                 accepted = true;
+                metrics.connection_accepted();
                 tracing::info!(tap_id = %cfg.tap_id, "accepted by hub");
             }
             HubToTapMessage::Reject(reject) => {
@@ -212,6 +307,7 @@ async fn serve_once(
                     up_tx.clone(),
                     Arc::clone(&streaming),
                     cfg.pacing_lead,
+                    Arc::clone(&metrics),
                 ));
                 cancels.insert(request.request_id, task.abort_handle());
             }
@@ -233,9 +329,15 @@ async fn serve_request(
     up: mpsc::Sender<Upstream>,
     streaming: Arc<tokio::sync::Mutex<Vec<RequestId>>>,
     pacing_lead: Duration,
+    metrics: Arc<TapMetrics>,
 ) {
     match variant {
         RequestVariant::AudioMetadataRequest(req) => {
+            // Dropped when this function returns, however it returns: the
+            // in-flight count and `tap_requests_completed_total` both move on
+            // that drop.
+            let _guard = metrics.request_received(RequestKind::Meta);
+
             let source = AudioSource::new(req.ars, req.discord_user_id);
             let variant = match handler.handle_audio_metadata_request(source).await {
                 Ok(success) => ResponseVariant::AudioMetadataSuccess(success),
@@ -250,10 +352,20 @@ async fn serve_request(
                     variant,
                 })))
                 .await;
+            metrics.reply_sent();
         }
 
         RequestVariant::AudioRequest(req) => {
-            serve_audio(request_id, req, handler, up, streaming, pacing_lead).await;
+            serve_audio(
+                request_id,
+                req,
+                handler,
+                up,
+                streaming,
+                pacing_lead,
+                metrics,
+            )
+            .await;
         }
     }
 }
@@ -265,12 +377,19 @@ async fn serve_audio(
     up: mpsc::Sender<Upstream>,
     streaming: Arc<tokio::sync::Mutex<Vec<RequestId>>>,
     pacing_lead: Duration,
+    metrics: Arc<TapMetrics>,
 ) {
+    // An audio request is in flight until its stream ends, not until it is
+    // answered: that is the interval a drain has to wait out, and the interval
+    // `/health` judges.
+    let _guard = metrics.request_received(RequestKind::Audio);
+
     let deliver_to = req.deliver_to.clone();
     let key = match SessionKey::from_bytes(&req.encryption_key.0) {
         Ok(k) => k,
         Err(e) => {
             report_failure(&up, request_id, format!("bad session key: {e}"), false).await;
+            metrics.reply_sent();
             return;
         }
     };
@@ -286,6 +405,7 @@ async fn serve_audio(
         Ok(s) => s,
         Err(e) => {
             report_failure(&up, request_id, e.to_string(), e.try_others()).await;
+            metrics.reply_sent();
             return;
         }
     };
@@ -296,9 +416,10 @@ async fn serve_audio(
             variant: ResponseVariant::AudioRequestSuccess(success),
         })))
         .await;
+    metrics.reply_sent();
 
     streaming.lock().await.push(request_id);
-    let outcome = pump(request_id, key, deliver_to, frame_rx, pacing_lead).await;
+    let outcome = pump(request_id, key, deliver_to, frame_rx, pacing_lead, &metrics).await;
     streaming.lock().await.retain(|id| *id != request_id);
 
     let _ = up
@@ -307,6 +428,7 @@ async fn serve_audio(
             outcome,
         }))
         .await;
+    metrics.reply_sent();
 }
 
 /// Move frames from the handler onto the wire, paced to roughly realtime.
@@ -316,6 +438,7 @@ async fn pump(
     deliver_to: Vec<String>,
     mut frames: mpsc::Receiver<OutFrame>,
     pacing_lead: Duration,
+    metrics: &TapMetrics,
 ) -> StreamOutcome {
     let mut sender = match protofish4::Sender::connect(
         &deliver_to,
@@ -348,6 +471,9 @@ async fn pump(
             };
         }
         sent += 1;
+        // Per frame, not per request: a transfer that has been streaming for a
+        // minute is making progress, and `/health` must not call that a stall.
+        metrics.reply_sent();
     }
 
     match sender.finish().await {

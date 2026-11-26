@@ -25,9 +25,8 @@ use zakofish4_common::state::PendingRequest;
 use zakofish4_hub::backend::HubBackend;
 use zakofish4_hub::{TapHandle, Transport, serve};
 use zakofish4_tap::{
-    AudioSource, AudioStreamSender, AudioCachePolicy, AudioCacheType, AudioMetadata,
-    AttachedMetadata, AudioMetadataSuccessMessage, AudioRequestSuccessMessage, TapError,
-    TapHandler, tap,
+    AttachedMetadata, AudioCachePolicy, AudioCacheType, AudioMetadata, AudioMetadataSuccessMessage,
+    AudioRequestSuccessMessage, AudioSource, AudioStreamSender, TapError, TapHandler, tap,
 };
 
 // --- a Transport over tokio-tungstenite ------------------------------------
@@ -130,7 +129,10 @@ impl TapHandler for TestTap {
         }
         Ok(AudioMetadataSuccessMessage {
             metadatas: vec![AudioMetadata::Title("Test Song".into())],
-            cache: AudioCachePolicy { cache_type: AudioCacheType::ARHash, ttl_seconds: Some(60) },
+            cache: AudioCachePolicy {
+                cache_type: AudioCacheType::ARHash,
+                ttl_seconds: Some(60),
+            },
         })
     }
 
@@ -148,7 +150,10 @@ impl TapHandler for TestTap {
         });
 
         Ok(AudioRequestSuccessMessage {
-            cache: AudioCachePolicy { cache_type: AudioCacheType::ARHash, ttl_seconds: Some(60) },
+            cache: AudioCachePolicy {
+                cache_type: AudioCacheType::ARHash,
+                ttl_seconds: Some(60),
+            },
             duration_secs: Some(0.5),
             metadatas: AttachedMetadata::Metadatas(vec![AudioMetadata::Title("Test Song".into())]),
         })
@@ -208,7 +213,11 @@ async fn bring_up(token: &'static str) -> Stack {
         .expect("tap should authenticate")
         .expect("handle");
 
-    Stack { handle, outcomes, done }
+    Stack {
+        handle,
+        outcomes,
+        done,
+    }
 }
 
 fn audio_request(id: RequestId, key: [u8; 32], deliver_to: Vec<String>) -> PendingRequest {
@@ -235,7 +244,9 @@ async fn audio_flows_from_tap_to_sink_and_the_hub_is_told() {
     // that makes a handshake unnecessary.
     let raw_key = protofish4::random_key();
     let request_id = RequestId::random();
-    let endpoint = Endpoint::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let endpoint = Endpoint::bind("127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
     let sink_addr = endpoint.local_addr().unwrap();
     let (_armed, mut streams) = endpoint
         .arm(
@@ -279,7 +290,9 @@ async fn audio_flows_from_tap_to_sink_and_the_hub_is_told() {
         .await
         .expect("audio should arrive");
 
-    let expected: Vec<Vec<u8>> = (0..FRAME_COUNT).map(|i| frame_payload(i).to_vec()).collect();
+    let expected: Vec<Vec<u8>> = (0..FRAME_COUNT)
+        .map(|i| frame_payload(i).to_vec())
+        .collect();
     assert_eq!(rel, expected, "the cache copy must be byte-exact");
 
     let outcome = tokio::time::timeout(Duration::from_secs(5), streams.outcome)
@@ -399,11 +412,11 @@ async fn an_unreachable_sink_is_reported_as_undeliverable() {
 
     // Nothing is listening on this port.
     let dead = "127.0.0.1:1".to_string();
-    assert!(stack.handle.dispatch(audio_request(
-        id,
-        protofish4::random_key(),
-        vec![dead]
-    )));
+    assert!(
+        stack
+            .handle
+            .dispatch(audio_request(id, protofish4::random_key(), vec![dead]))
+    );
 
     // First the answer, then the failure report.
     for _ in 0..2 {

@@ -9,7 +9,10 @@ pub struct AudioSource {
 
 impl AudioSource {
     pub(crate) fn new(ars: AudioRequestString, requester: DiscordUserId) -> Self {
-        Self { inner: ars.0, requester }
+        Self {
+            inner: ars.0,
+            requester,
+        }
     }
 
     pub fn as_str(&self) -> &str {

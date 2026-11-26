@@ -35,14 +35,20 @@ pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, CodecError> {
     let mut ser = rmp_serde::Serializer::new(&mut buf).with_struct_map();
     value.serialize(&mut ser)?;
     if buf.len() > MAX_FRAME_BYTES {
-        return Err(CodecError::TooLarge { got: buf.len(), max: MAX_FRAME_BYTES });
+        return Err(CodecError::TooLarge {
+            got: buf.len(),
+            max: MAX_FRAME_BYTES,
+        });
     }
     Ok(buf)
 }
 
 pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, CodecError> {
     if bytes.len() > MAX_FRAME_BYTES {
-        return Err(CodecError::TooLarge { got: bytes.len(), max: MAX_FRAME_BYTES });
+        return Err(CodecError::TooLarge {
+            got: bytes.len(),
+            max: MAX_FRAME_BYTES,
+        });
     }
     Ok(rmp_serde::from_slice(bytes)?)
 }

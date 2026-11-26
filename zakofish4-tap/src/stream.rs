@@ -34,7 +34,13 @@ impl AudioStreamSender {
     /// Returns `false` once the sink has gone away and frames are no longer
     /// being consumed; stop sending at that point.
     pub async fn send_frame(&self, ts_ms: u64, data: Bytes) -> bool {
-        self.tx.send(OutFrame { ts_ms, payload: data }).await.is_ok()
+        self.tx
+            .send(OutFrame {
+                ts_ms,
+                payload: data,
+            })
+            .await
+            .is_ok()
     }
 
     /// Send the `frame_index`-th 20 ms Opus frame, computing its timestamp.
@@ -61,7 +67,10 @@ pub(crate) struct Pacer {
 
 impl Pacer {
     pub fn new(lead: Duration) -> Self {
-        Self { start: tokio::time::Instant::now(), lead }
+        Self {
+            start: tokio::time::Instant::now(),
+            lead,
+        }
     }
 
     /// Wait until this frame is due.
