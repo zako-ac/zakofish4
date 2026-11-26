@@ -73,11 +73,19 @@ async fn health(State(state): State<HealthState>) -> impl IntoResponse {
             ),
         )
     } else {
+        // Before the first request there is no last activity to measure from,
+        // and `now - 0` is the whole unix epoch — a number that reads like a
+        // fault in the one endpoint an operator checks first. Say what is true.
+        let idle = if snapshot.last_activity_at_ms == 0 {
+            "idle: no requests yet".to_string()
+        } else {
+            format!("idle {idle_ms}ms")
+        };
         (
             StatusCode::OK,
             format!(
-                "ok: {} in flight, {} connections, idle {}ms\n",
-                snapshot.in_flight, snapshot.connections, idle_ms
+                "ok: {} in flight, {} connections, {}\n",
+                snapshot.in_flight, snapshot.connections, idle
             ),
         )
     }
@@ -110,6 +118,21 @@ mod tests {
             health(State(st)).await.into_response().status(),
             StatusCode::OK
         );
+    }
+
+    /// The body is what an operator reads first. `idle 1795732437824ms` — now
+    /// minus the epoch — reads like a fault when nothing has happened yet, and
+    /// that is exactly the state a freshly started tap is in.
+    #[tokio::test]
+    async fn a_tap_with_no_requests_says_so_instead_of_printing_the_epoch() {
+        let st = state(TapMetrics::new(), Duration::from_secs(20));
+        let response = health(State(st)).await.into_response();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body");
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("no requests yet"), "body was {text:?}");
+        assert!(!text.contains("idle 1"), "body was {text:?}");
     }
 
     /// The case `/health` exists for: a request is in flight and the pipeline
