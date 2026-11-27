@@ -28,6 +28,38 @@ fn default_drain_timeout() -> Duration {
         .unwrap_or(Duration::from_secs(20))
 }
 
+/// How long a request may be in flight with nothing written back before the
+/// process ends itself, unless the builder overrides it.
+///
+/// Read from `TAP_REQUEST_DEADLINE_SECS`, the pf3 SDK's name for the same knob,
+/// so one variable in `taps-common-config` arms either transport. `0` disables
+/// the watchdog. An unparseable value keeps the default and logs a warning: a
+/// typo silently disabling the watchdog is the one outcome nobody would notice.
+fn default_request_deadline() -> Duration {
+    let Ok(raw) = std::env::var("TAP_REQUEST_DEADLINE_SECS") else {
+        return crate::watchdog::DEFAULT_REQUEST_DEADLINE;
+    };
+    match raw.trim().parse::<u64>() {
+        Ok(0) => {
+            tracing::warn!(
+                env = "TAP_REQUEST_DEADLINE_SECS",
+                "request deadline watchdog disabled by an explicit 0"
+            );
+            Duration::ZERO
+        }
+        Ok(secs) => Duration::from_secs(secs),
+        Err(_) => {
+            tracing::warn!(
+                env = "TAP_REQUEST_DEADLINE_SECS",
+                value = %raw,
+                default_secs = crate::watchdog::DEFAULT_REQUEST_DEADLINE.as_secs(),
+                "unparseable request deadline; keeping the default"
+            );
+            crate::watchdog::DEFAULT_REQUEST_DEADLINE
+        }
+    }
+}
+
 /// How long a request may be in flight with nothing written back before
 /// `/health` answers 503, unless the builder overrides it.
 ///
@@ -56,6 +88,9 @@ pub struct TapBuilder {
     /// How long a request may sit in flight with nothing written back before
     /// `/health` reports 503.
     health_stall: Duration,
+    /// How long a request may sit in flight with nothing written back before
+    /// the process ends itself. Zero disables the watchdog.
+    request_deadline: Duration,
     #[cfg(feature = "healthcheck")]
     healthcheck_port: Option<u16>,
 }
@@ -80,6 +115,7 @@ impl Default for TapBuilder {
             idle_timeout: Duration::from_secs(60),
             drain_timeout: default_drain_timeout(),
             health_stall: default_health_stall(),
+            request_deadline: default_request_deadline(),
             #[cfg(feature = "healthcheck")]
             healthcheck_port: None,
         }
@@ -169,6 +205,18 @@ impl TapBuilder {
         self
     }
 
+    /// How long a request may sit in flight with nothing written back before
+    /// the process ends itself with exit code 70, so k8s restarts it.
+    ///
+    /// Default from `TAP_REQUEST_DEADLINE_SECS` (60s). `Duration::ZERO`
+    /// disables it. Measured on progress, not on duration: a long stream that
+    /// keeps writing never breaches, and an idle tap has nothing in flight to
+    /// breach with.
+    pub fn request_deadline(mut self, deadline: Duration) -> Self {
+        self.request_deadline = deadline;
+        self
+    }
+
     /// Connect and serve until the hub rejects this tap, a drain signal
     /// arrives, or the process ends. Reconnection with backoff is handled
     /// internally.
@@ -206,6 +254,13 @@ impl TapBuilder {
         #[cfg(not(feature = "healthcheck"))]
         let _ = (&metrics, self.health_stall);
 
+        // Armed before the first connection, and independent of it: the failure
+        // this is for is a handler that stopped making progress while the
+        // process is perfectly able to schedule a timer.
+        if !self.request_deadline.is_zero() {
+            crate::watchdog::spawn(Arc::clone(&metrics), self.request_deadline);
+        }
+
         runtime::run(cfg, handler).await
     }
 }
@@ -238,5 +293,43 @@ mod tests {
         let b = tap();
         assert_eq!(b.drain_timeout, Duration::from_secs(20));
         assert_eq!(b.health_stall, Duration::from_secs(20));
+    }
+
+    /// The deadline knob: the default, a deployment's value, an explicit
+    /// disable, and a typo that must not silently disable the watchdog.
+    #[test]
+    fn the_request_deadline_reads_its_variable_and_survives_a_typo() {
+        // SAFETY: as above — this test is the only reader of the variable, and
+        // it reads it through `default_request_deadline`.
+        unsafe {
+            std::env::remove_var("TAP_REQUEST_DEADLINE_SECS");
+        }
+        assert_eq!(
+            default_request_deadline(),
+            crate::watchdog::DEFAULT_REQUEST_DEADLINE
+        );
+
+        unsafe {
+            std::env::set_var("TAP_REQUEST_DEADLINE_SECS", "42");
+        }
+        assert_eq!(default_request_deadline(), Duration::from_secs(42));
+
+        unsafe {
+            std::env::set_var("TAP_REQUEST_DEADLINE_SECS", "0");
+        }
+        assert_eq!(default_request_deadline(), Duration::ZERO);
+
+        unsafe {
+            std::env::set_var("TAP_REQUEST_DEADLINE_SECS", "sixty");
+        }
+        assert_eq!(
+            default_request_deadline(),
+            crate::watchdog::DEFAULT_REQUEST_DEADLINE,
+            "a typo keeps the default rather than disabling the watchdog"
+        );
+
+        unsafe {
+            std::env::remove_var("TAP_REQUEST_DEADLINE_SECS");
+        }
     }
 }

@@ -38,6 +38,16 @@
 //! - `auto-encode` — [`decode_and_stream`], which pipes an encoded file through
 //!   ffmpeg and sends the Opus frames out.
 //! - `healthcheck` — [`TapBuilder::healthcheck_port`], serving `GET /health`.
+//!
+//! Two more things the SDK does on its own, because they are the difference
+//! between a wedged tap and one that comes back:
+//!
+//! - **Drain.** `ZAKO_DRAIN_TIMEOUT_SECS` after SIGTERM, accepted transfers are
+//!   given a window to finish before the process exits.
+//! - **The request deadline.** A request in flight with nothing written back for
+//!   `TAP_REQUEST_DEADLINE_SECS` (default 60) ends the process with exit code 70,
+//!   so k8s restarts it and the reason lands in the log and in
+//!   `tap_request_deadline_exceeded_total`. See [`watchdog`].
 
 pub mod builder;
 #[cfg(feature = "auto-encode")]
@@ -50,6 +60,7 @@ pub mod metrics;
 mod runtime;
 pub mod source;
 pub mod stream;
+pub mod watchdog;
 
 pub use builder::{TapBuilder, tap};
 #[cfg(feature = "auto-encode")]
@@ -59,6 +70,7 @@ pub use handler::TapHandler;
 pub use metrics::{RequestKind, TapMetrics, TapSnapshot, unix_millis};
 pub use source::AudioSource;
 pub use stream::{AudioStreamSender, FRAME_MS};
+pub use watchdog::{DEFAULT_REQUEST_DEADLINE, REQUEST_DEADLINE_EXIT_CODE};
 
 pub use zakofish4_common as common;
 pub use zakofish4_common::messages::AttachedMetadata;
