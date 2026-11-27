@@ -83,6 +83,7 @@ pub struct TapMetrics {
     last_reply_at_ms: AtomicU64,
     last_activity_at_ms: AtomicU64,
     connections: AtomicU64,
+    deadline_exceeded: AtomicU64,
 }
 
 impl TapMetrics {
@@ -96,6 +97,7 @@ impl TapMetrics {
             last_reply_at_ms: AtomicU64::new(0),
             last_activity_at_ms: AtomicU64::new(0),
             connections: AtomicU64::new(0),
+            deadline_exceeded: AtomicU64::new(0),
         })
     }
 
@@ -150,6 +152,21 @@ impl TapMetrics {
         self.connections.fetch_add(1, Ordering::SeqCst);
     }
 
+    /// A request sat in flight with nothing moving past the deadline, so the
+    /// process is about to end itself.
+    ///
+    /// Incremented immediately before the exit. A scrape only sees it if one
+    /// lands in that window, which is why the log line is the durable record and
+    /// this counter is the dashboard's — see [`crate::watchdog`].
+    pub fn request_deadline_exceeded(&self) {
+        self.deadline_exceeded.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// How many times this process ended itself on a request deadline.
+    pub fn deadline_exceeded(&self) -> u64 {
+        self.deadline_exceeded.load(Ordering::SeqCst)
+    }
+
     /// Render the Prometheus text exposition format.
     ///
     /// Hand-written rather than through an OpenTelemetry exporter: this crate
@@ -196,6 +213,14 @@ impl TapMetrics {
         out.push_str("# HELP tap_connections_total WebSocket connections the hub accepted, including reconnects\n");
         out.push_str("# TYPE tap_connections_total counter\n");
         out.push_str(&format!("tap_connections_total {}\n", s.connections));
+        out.push_str(
+            "# HELP tap_request_deadline_exceeded_total Requests that stopped making progress past the deadline and ended the process\n",
+        );
+        out.push_str("# TYPE tap_request_deadline_exceeded_total counter\n");
+        out.push_str(&format!(
+            "tap_request_deadline_exceeded_total {}\n",
+            self.deadline_exceeded()
+        ));
         out
     }
 }
